@@ -233,12 +233,22 @@ export default function LoginPage() {
                   inputMode="numeric"
                   maxLength={4}
                   type="text"
-                  className="w-full rounded-xl px-4 py-4 text-2xl tracking-[0.6em] text-center font-bold bg-white text-slate-900 placeholder:text-slate-400 placeholder:tracking-normal placeholder:text-base placeholder:font-normal outline-none focus:ring-2 focus:ring-white/80 shadow"
+                  disabled={loading}
+                  className="w-full rounded-xl px-4 py-4 text-2xl tracking-[0.6em] text-center font-bold bg-white text-slate-900 placeholder:text-slate-400 placeholder:tracking-normal placeholder:text-base placeholder:font-normal outline-none focus:ring-2 focus:ring-white/80 shadow disabled:opacity-60"
                   value={otp}
                   onChange={(e) => onOtpChange(e.target.value)}
                   placeholder="Enter OTP"
                 />
                 {error && <p className="text-white font-semibold">{error}</p>}
+                {loading && (
+                  <p className="text-white font-semibold inline-flex items-center gap-2">
+                    <span
+                      className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"
+                      aria-hidden
+                    />
+                    Verifying…
+                  </p>
+                )}
                 <div className="flex items-center justify-between">
                   <button
                     type="button"
@@ -256,13 +266,6 @@ export default function LoginPage() {
                     Resend OTP
                   </button>
                 </div>
-                <button
-                  type="submit"
-                  disabled={loading || otp.length !== 4}
-                  className="rounded-xl bg-white/95 text-[#d9212b] font-bold px-12 py-3 text-base hover:bg-white transition disabled:opacity-60 disabled:cursor-not-allowed shadow"
-                >
-                  {loading ? 'Verifying…' : 'Sign In'}
-                </button>
               </form>
             </>
           )}

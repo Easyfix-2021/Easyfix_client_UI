@@ -120,18 +120,28 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
           sidebarOpen ? 'w-64' : 'w-0 md:w-16 overflow-hidden'
         )}
       >
-        {/* Brand */}
-        <div className="px-4 py-5 flex items-center gap-3 border-b border-white/15">
-          <div className="bg-white rounded-md p-1.5 shrink-0">
-            <Image src="/logoTrans.png" alt="EasyFix" width={120} height={36} className="h-7 w-auto" />
-          </div>
-          {sidebarOpen && (
+        {/* Brand — full wordmark when expanded, square "EF" pill when collapsed */}
+        {sidebarOpen ? (
+          <div className="px-4 py-5 flex items-center gap-3 border-b border-white/15">
+            <div className="bg-white rounded-md p-1.5 shrink-0">
+              <Image src="/logoTrans.png" alt="EasyFix" width={120} height={36} className="h-7 w-auto" />
+            </div>
             <div className="min-w-0">
               <div className="text-xs uppercase tracking-wider text-white/70">Service Dashboard</div>
               <div className="text-sm font-semibold truncate">Client #{spoc?.client_id ?? '—'}</div>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="py-4 flex items-center justify-center border-b border-white/15">
+            <div
+              className="w-10 h-10 bg-white text-primary font-extrabold rounded-md flex items-center justify-center text-sm tracking-tight"
+              title={`EasyFix · Client #${spoc?.client_id ?? '—'}`}
+              aria-label="EasyFix"
+            >
+              EF
+            </div>
+          </div>
+        )}
 
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
           {SECTION_ONE.map((item) => (
@@ -143,19 +153,6 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
           {SECTION_TWO.map((item) => (
             <SidebarLink key={item.label} item={item} active={isActive(item)} collapsed={!sidebarOpen} />
           ))}
-
-          <button
-            type="button"
-            onClick={logout}
-            title={!sidebarOpen ? 'Logout' : undefined}
-            className={cn(
-              'mt-1 w-full flex items-center gap-3 px-3 py-2 rounded text-sm transition',
-              'text-white/85 hover:bg-white/10 hover:text-white'
-            )}
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            {sidebarOpen && <span>Logout</span>}
-          </button>
         </nav>
       </aside>
 
@@ -202,6 +199,16 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
                 </span>
               </span>
             </Link>
+
+            <button
+              type="button"
+              onClick={logout}
+              aria-label="Logout"
+              title="Logout"
+              className="p-2 rounded hover:bg-primary-50 text-slate-700 hover:text-primary transition"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
           </div>
         </header>
 
