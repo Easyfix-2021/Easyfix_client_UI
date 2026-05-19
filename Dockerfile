@@ -1,0 +1,107 @@
+# Easyfix_client_UI — multi-stage production image
+#
+# Stage 1 (deps):    Install ALL deps (incl. devDeps — Tailwind, TS, Next).
+# Stage 2 (builder): Run `next build` with NEXT_PUBLIC_API_URL baked in.
+#                    Produces .next/standalone/ thanks to output: 'standalone'
+#                    in next.config.mjs.
+# Stage 3 (runner):  Copy ONLY the standalone output + static assets +
+#                    public/. No node_modules (standalone bundles its own
+#                    minimal copy), no source, no devDeps.
+#
+# Image size: ~180 MB (vs ~900 MB if we shipped the full node_modules).
+#
+# CRITICAL: NEXT_PUBLIC_API_URL is read AT BUILD TIME and baked into the
+# static JS chunks. Every browser that loads the bundle hits whatever URL
+# was set when `next build` ran. The GitHub workflow passes this as a
+# `--build-arg` so each environment (QA / Production) gets the right URL.
+# The build-arg is reflected in the image tag too, so we never accidentally
+# deploy a QA-baked image to production.
+
+# ── Stage 1: Dependencies ────────────────────────────────────────────
+FROM node:20-alpine AS deps
+WORKDIR /app
+# Copy lockfile separately so the deps layer survives source edits.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# ── Stage 2: Builder ─────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Build-time arg from the GitHub workflow. NO default — leaving it
+# empty here forces the sanity check below to fail loud when someone
+# runs `docker build` without --build-arg. Silently baking a wrong /
+# placeholder URL would produce a working-looking image that 404s on
+# every API call once deployed, which is far worse than a build error.
+ARG NEXT_PUBLIC_API_URL=
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Sanity-check the bake BEFORE building so we don't waste 30s+ on a
+# Next.js build that produces an unusable image. Three guarantees:
+#   1. Non-empty — caller passed --build-arg NEXT_PUBLIC_API_URL=…
+#   2. Not localhost / not a placeholder — we'd never ship a bundle
+#      that talks to localhost in prod.
+#   3. Ends with `/api` — `src/lib/api.ts` builds requests as
+#      `/api/client${path}` and the Next rewrite proxies `/api/*` to
+#      `${NEXT_PUBLIC_API_URL}/*`, so the base MUST include `/api`.
+RUN if [ -z "$NEXT_PUBLIC_API_URL" ]; then \
+      echo "✗ NEXT_PUBLIC_API_URL not provided to docker build."; \
+      echo "  Pass --build-arg NEXT_PUBLIC_API_URL=<https://your-api/api>"; \
+      exit 1; \
+    fi; \
+    case "$NEXT_PUBLIC_API_URL" in \
+      *localhost*|*placeholder*) \
+        echo "✗ Refusing to bake a localhost/placeholder URL into the bundle: $NEXT_PUBLIC_API_URL"; \
+        exit 1 ;; \
+    esac; \
+    case "$NEXT_PUBLIC_API_URL" in \
+      */api|*/api/) ;; \
+      *) \
+        echo "✗ NEXT_PUBLIC_API_URL must end with '/api' (got: $NEXT_PUBLIC_API_URL)"; \
+        echo "  The frontend builds request URLs as /api/client/<path>"; \
+        echo "  via Next rewrites; the backend serves at /api/client/…, so the base MUST include /api."; \
+        exit 1 ;; \
+    esac; \
+    echo "✓ NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL"
+
+# Telemetry off — we don't want Next phoning home from CI.
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# ── Stage 3: Runner ──────────────────────────────────────────────────
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# Non-root runtime user. node:20-alpine ships uid 1000 = `node`.
+RUN apk add --no-cache wget tini \
+    && chown -R node:node /app
+USER node
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=5181 \
+    HOSTNAME=0.0.0.0
+
+# Standalone bundle — server.js + pruned node_modules. Tiny.
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+# Static assets (chunks + Tailwind output) — Next won't generate these
+# automatically inside standalone; copy from .next/static.
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+# Public assets (favicon, logos, mobile mockup, background.png, etc.)
+COPY --from=builder --chown=node:node /app/public ./public
+
+EXPOSE 5181
+
+# Probe the root path — Client_UI's sign-in page is rendered by
+# `app/page.tsx` (no /login route), so `/` returns 200 with the login HTML
+# for unauthenticated requests.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:5181/ -O /dev/null || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+# server.js comes from the standalone output. It's the production server
+# entry point — equivalent to `next start` but without npm/next on PATH.
+CMD ["node", "server.js"]

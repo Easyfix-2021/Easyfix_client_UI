@@ -1,0 +1,417 @@
+# Easyfix_client_UI — build in CI → push to ECR → docker pull on EC2
+#
+# Targets:
+#   QA branch         → AWS EC2 at 10.30.2.30 (QA_INSTANCE_ID secret)
+#                                              SHARED VM with EasyFix_Backend + Easyfix_CRM_UI
+#   Production branch → AWS EC2 (PROD_INSTANCE_ID)  (when prod is ready)
+#
+# Pipeline per push:
+#   1. Typecheck on github-hosted runner (cheap fail-fast)
+#   2. Build Docker image with --build-arg NEXT_PUBLIC_API_URL=<env's URL>
+#      → bakes the right backend URL into the static JS chunks
+#      → tags qa-<sha> + qa-latest, pushes both to ECR
+#   3. SSM send-command on the EC2:
+#         a. update CLIENT_UI_IMAGE in /opt/easyfix/.env to the new tag
+#         b. docker compose pull client-ui
+#         c. docker compose up -d --no-deps --force-recreate client-ui
+#         d. wait for HEALTHY status
+#   4. Smoke-test http://127.0.0.1:5181/ via second SSM call (Client_UI's
+#      sign-in page is at `/`, not `/login`)
+#
+# CRITICAL: NEXT_PUBLIC_API_URL is read at BUILD TIME, baked into the
+# bundle. We pass it as --build-arg here; the Dockerfile also fails the
+# build if the value is empty or still the placeholder.
+#
+# Required GitHub Environment (org-level, name "Organisation Level Secrets") secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#   QA_INSTANCE_ID, PROD_INSTANCE_ID
+#   QA_API_URL                https://qa.backend.easyfix.in/api  (must end with /api)
+#   PROD_API_URL              (when prod is ready — must end with /api)
+#   ECR_REGISTRY              902810393464.dkr.ecr.ap-south-1.amazonaws.com
+#   ECR_REPOSITORY_CLIENT_UI  easyfix/client-ui
+#   MAIL_USERNAME / MAIL_PASSWORD   (optional — failure-alert SMTP)
+#
+# `*_API_URL` MUST end with `/api` — the FE's `src/lib/api.ts` builds
+# request URLs as `/api/client${path}` (no `/api` prefix on path), and
+# `next.config.mjs` rewrites `/api/*` → `${NEXT_PUBLIC_API_URL}/*`. The
+# Dockerfile sanity check enforces this and will fail the build if the
+# suffix is missing.
+#
+# `environment: 'Organisation Level Secrets'` is REQUIRED on every job
+# that reads org-level environment secrets — same rule as the backend +
+# CRM_UI workflows. The environment name is verbatim as configured in
+# GitHub (spaces are valid; YAML quoting is required).
+#
+# EC2 PREREQUISITE: /opt/easyfix/docker-compose.yml on the shared VM
+# must include a `client-ui` service (parallel to `crm-ui` and `backend`)
+# bound to port 5181 and consuming `${CLIENT_UI_IMAGE}` from
+# /opt/easyfix/.env. See AWS_QA_BOOTSTRAP.md or the existing crm-ui
+# service for the template.
+
+name: Deploy Client_UI (CI build → ECR → SSM pull)
+
+on:
+  push:
+    branches: [QA, Production]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deploy target'
+        required: true
+        default: 'QA'
+        type: choice
+        options: [QA, Production]
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  precheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: 'npm' }
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+  build-and-push:
+    name: Build image & push to ECR
+    needs: precheck
+    # Native arm64 runner (Graviton EC2 target). Avoids the QEMU + V8
+    # SIGILL crash during `npm ci`/`next build`.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    environment: 'Organisation Level Secrets'
+    # NOTE: we deliberately do NOT pass instance_id or api_url as job
+    # outputs — GitHub Actions scrubs secret values from cross-job
+    # output strings (safety feature), so the deploy job would receive
+    # empty strings. Each job that needs them re-reads from secrets.
+    # `environment:` on every consuming job makes secrets resolvable.
+    # Only env_name (non-secret) is passed across.
+    outputs:
+      # image_uri removed — GitHub scrubs any output that contains a
+      # secret value (ECR_REGISTRY/ECR_REPOSITORY_CLIENT_UI), so it
+      # would arrive empty in the deploy job. We pass the non-secret
+      # tag and rebuild the URI on the consuming side from secrets.
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      env_name:  ${{ steps.target.outputs.env_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve env name
+        id: target
+        run: |
+          TARGET="${{ github.event.inputs.target || github.ref_name }}"
+          if [[ "$TARGET" == "QA" ]]; then
+            echo "env_name=qa"          >> "$GITHUB_OUTPUT"
+          else
+            echo "env_name=production"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve API URL (with fallback)
+        # Single source of truth for NEXT_PUBLIC_API_URL: read the env-
+        # appropriate secret, fall back to a hard-coded URL if the secret
+        # is missing/empty. Both CRM_UI and Client_UI hit the same
+        # backend host, so we reuse QA_API_URL / PROD_API_URL verbatim
+        # (no separate _CLIENT_ variants needed). The bake-time guard
+        # against localhost stays — we never want a bundle pointing at
+        # localhost to ship.
+        id: api
+        run: |
+          ENV_NAME="${{ steps.target.outputs.env_name }}"
+          if [[ "$ENV_NAME" == "qa" ]]; then
+            URL="${{ secrets.QA_API_URL }}"
+            FALLBACK="http://10.30.2.30:5100/api"
+          else
+            URL="${{ secrets.PROD_API_URL }}"
+            FALLBACK=""   # no fallback for prod — fail rather than guess
+          fi
+
+          if [[ -z "$URL" ]]; then
+            if [[ -n "$FALLBACK" ]]; then
+              echo "::warning::Secret for $ENV_NAME API URL is empty — using fallback $FALLBACK. Add the secret to org/repo settings to silence this."
+              URL="$FALLBACK"
+            else
+              echo "::error::No API URL secret for $ENV_NAME and no fallback configured"
+              exit 1
+            fi
+          fi
+
+          if [[ "$URL" == *"localhost"* || "$URL" == "http://placeholder.invalid/api" ]]; then
+            echo "::error::Refusing to build a bundle baked with localhost: $URL"
+            exit 1
+          fi
+
+          echo "Will bake NEXT_PUBLIC_API_URL=$URL into the bundle"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # ap-south-1 is hardcoded as a fallback so a transient secret-
+          # access misconfiguration doesn't block the deploy. Both ECR
+          # and the EC2 live in this region; remove the fallback when
+          # the org-level AWS_REGION secret is verified resolvable.
+          aws-region:            ${{ secrets.AWS_REGION || 'ap-south-1' }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image metadata
+        id: meta
+        # Validate the ECR secrets BEFORE we kick off a 5-min Next build —
+        # otherwise the build silently produces an `image:tag` without a
+        # registry and fails downstream in confusing ways.
+        run: |
+          # Hardcoded fallbacks for public-knowledge values — keeps the
+          # pipeline running through transient secret-access misconfigs.
+          # Account ID and repo name aren't sensitive (they appear in
+          # every pull URL); the credentials that authorize push/pull
+          # ARE sensitive, but those live in AWS_ACCESS_KEY_ID etc.
+          REGISTRY="${{ secrets.ECR_REGISTRY || '902810393464.dkr.ecr.ap-south-1.amazonaws.com' }}"
+          REPO="${{ secrets.ECR_REPOSITORY_CLIENT_UI || 'easyfix/client-ui' }}"
+          ENV_NAME="${{ steps.target.outputs.env_name }}"
+
+          SHA_TAG="${ENV_NAME}-${GITHUB_SHA::7}"
+          # image_tag is non-secret (env-name + sha) — safe across jobs.
+          echo "image_tag=${SHA_TAG}"                              >> "$GITHUB_OUTPUT"
+          echo "image_uri=${REGISTRY}/${REPO}:${SHA_TAG}"          >> "$GITHUB_OUTPUT"
+          echo "moving_uri=${REGISTRY}/${REPO}:${ENV_NAME}-latest" >> "$GITHUB_OUTPUT"
+
+      # No QEMU needed — runs-on: ubuntu-24.04-arm gives us a native
+      # arm64 runner, so buildx produces arm64 binaries directly. QEMU
+      # emulation crashed Node's V8 during `npm ci` with SIGILL.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push Client-UI image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/arm64
+          # NEXT_PUBLIC_API_URL is baked into the bundle. We consume the
+          # already-resolved value from the `api` step (which handles
+          # the fallback for missing secrets) rather than reading the
+          # secret again here — single source of truth.
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ steps.api.outputs.url }}
+          tags: |
+            ${{ steps.meta.outputs.image_uri }}
+            ${{ steps.meta.outputs.moving_uri }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          provenance: false
+
+  deploy:
+    name: Deploy via SSM (docker pull on EC2)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: 'Organisation Level Secrets'
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # ap-south-1 is hardcoded as a fallback so a transient secret-
+          # access misconfiguration doesn't block the deploy. Both ECR
+          # and the EC2 live in this region; remove the fallback when
+          # the org-level AWS_REGION secret is verified resolvable.
+          aws-region:            ${{ secrets.AWS_REGION || 'ap-south-1' }}
+
+      - name: Resolve instance ID for this env
+        id: target
+        # Read INSTANCE_ID from secrets HERE (in this job) — it can't
+        # be inherited from build-and-push because GitHub scrubs secret
+        # values from cross-job outputs.
+        run: |
+          # Fallback for QA only — instance ID is public-info, hardcoding
+          # avoids a transient secret-access misconfig blocking deploys.
+          # Prod stays strict (no fallback) because there's no prod box yet
+          # and a wrong instance ID would be a much bigger blast radius.
+          ENV_NAME="${{ needs.build-and-push.outputs.env_name }}"
+          if [[ "$ENV_NAME" == "qa" ]]; then
+            echo "instance_id=${{ secrets.QA_INSTANCE_ID || 'i-032aa9d2942305364' }}"  >> "$GITHUB_OUTPUT"
+          else
+            echo "instance_id=${{ secrets.PROD_INSTANCE_ID }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: SSM compose pull + up
+        id: ssm
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
+          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          ENV_NAME="${{ needs.build-and-push.outputs.env_name }}"
+
+          # Rebuild the ECR URI from secrets here — passing it across
+          # jobs would cause GitHub to scrub it (registry/repo are
+          # secrets), arriving empty. Fallbacks for both: account ID
+          # and repo name are public knowledge; only the AWS credentials
+          # protecting access to ECR are sensitive.
+          REGISTRY="${{ secrets.ECR_REGISTRY || '902810393464.dkr.ecr.ap-south-1.amazonaws.com' }}"
+          REPO="${{ secrets.ECR_REPOSITORY_CLIENT_UI || 'easyfix/client-ui' }}"
+          IMAGE_URI="${REGISTRY}/${REPO}:${IMAGE_TAG}"
+
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "::error::INSTANCE_ID resolution failed even with fallback — should not happen for QA"
+            exit 1
+          fi
+
+          REMOTE_SCRIPT=$(cat <<EOF
+          set -euo pipefail
+          cd /opt/easyfix
+
+          for required in /opt/easyfix/.env /opt/easyfix/backend.env /opt/easyfix/docker-compose.yml; do
+            if [[ ! -f "\$required" ]]; then
+              echo "::error::\$required missing — see AWS_QA_BOOTSTRAP.md"
+              exit 1
+            fi
+          done
+
+          # Update CLIENT_UI_IMAGE in .env. Append if first run.
+          if grep -q '^CLIENT_UI_IMAGE=' /opt/easyfix/.env; then
+            sed -i "s|^CLIENT_UI_IMAGE=.*|CLIENT_UI_IMAGE=$IMAGE_URI|" /opt/easyfix/.env
+          else
+            echo "CLIENT_UI_IMAGE=$IMAGE_URI" >> /opt/easyfix/.env
+          fi
+
+          # \$IMAGE_URI is substituted at heredoc-build time on the runner;
+          # \$CLIENT_UI_IMAGE only exists in /opt/easyfix/.env (read by docker
+          # compose, not bash) and would trip \`set -u\`.
+          echo "▶ Pulling $IMAGE_URI"
+          docker compose pull client-ui
+
+          echo "▶ Recreating client-ui container (backend + crm-ui untouched)"
+          docker compose up -d --no-deps --force-recreate client-ui
+
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            STATUS=\$(docker inspect --format '{{.State.Health.Status}}' easyfix-client-ui 2>/dev/null || echo unknown)
+            echo "[\$i/15] client-ui health: \$STATUS"
+            [[ "\$STATUS" == "healthy" ]] && break
+            sleep 4
+          done
+
+          docker image prune -af --filter "until=72h" >/dev/null 2>&1 || true
+
+          docker compose ps client-ui
+          echo "✓ Deployed $IMAGE_URI"
+          EOF
+          )
+
+          # AWS-RunShellScript runs commands via /bin/sh = dash on Ubuntu.
+          # `bash -c "<json-encoded-string>"` doesn't survive the round-trip:
+          # newlines arrive as literal `\n`, collapsing the script onto one
+          # line. Base64 sidesteps every escape layer.
+          SCRIPT_B64=$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)
+          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" \
+            '{commands: ["echo \($b64) | base64 -d | bash"]}')
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy client-ui ${IMAGE_URI##*:}" \
+            --parameters "$PARAMS_JSON" \
+            --query 'Command.CommandId' --output text)
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+
+          STATUS=""
+          for i in $(seq 1 60); do
+            sleep 5
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query 'Status' --output text 2>/dev/null || echo Pending)
+            echo "[$i/60] SSM status: $STATUS"
+            case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
+          done
+
+          echo
+          echo "── Remote stdout ──"
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' --output text || true
+          echo
+          echo "── Remote stderr ──"
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query 'StandardErrorContent' --output text || true
+
+          [[ "$STATUS" == "Success" ]] || { echo "::error::SSM finished with $STATUS"; exit 1; }
+
+      - name: Smoke-test deployed UI
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
+
+          # Next.js cold-start is ~10–20s. Compose start_period is 45s,
+          # so we give the smoke test ~70s total before declaring failure
+          # and dump container logs to save a debug round-trip. Probes
+          # `/` because Client_UI's login page is at the root (app/page.tsx
+          # — no /login route, unlike CRM_UI).
+          SMOKE_SCRIPT='set -e
+          echo "Waiting 10s for cold start before probing…"; sleep 10
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5181/ || echo 000)
+            if [[ "$code" =~ ^[23] ]]; then echo "✓ / → $code"; exit 0; fi
+            echo "Attempt $i: / → $code, retrying in 5s…"; sleep 5
+          done
+          echo "✗ / never returned 2xx/3xx"
+          echo "── docker compose ps ──"
+          sudo docker compose -f /opt/easyfix/docker-compose.yml ps 2>&1 || true
+          echo "── easyfix-client-ui logs (tail 80) ──"
+          sudo docker logs easyfix-client-ui --tail 80 2>&1 || true
+          exit 1'
+
+          SCRIPT_B64=$(printf '%s' "$SMOKE_SCRIPT" | base64 -w0)
+          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" \
+            '{commands: ["echo \($b64) | base64 -d | bash"]}')
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Smoke test client-ui" \
+            --parameters "$PARAMS_JSON" \
+            --query 'Command.CommandId' --output text)
+
+          for i in $(seq 1 24); do
+            sleep 5
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query 'Status' --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' --output text || true
+
+          [[ "$STATUS" == "Success" ]] || { aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text; exit 1; }
+
+      - name: Notify on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[Deploy FAILED] Client_UI → ${{ needs.build-and-push.outputs.env_name }} (${{ github.sha }})"
+          to: harshit@channelplay.in
+          from: ${{ secrets.MAIL_USERNAME }}
+          body: |
+            Client-UI deploy FAILED.
+
+            Image:    ${{ needs.build-and-push.outputs.image_tag }}
+            Instance: ${{ steps.target.outputs.instance_id }}
+            Branch:   ${{ github.ref_name }}
+            Commit:   ${{ github.sha }}
+            Triggered: ${{ github.actor }}
+            Run URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
