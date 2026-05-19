@@ -3,20 +3,42 @@
 /*
  * Client SPOC login — replicates the legacy Angular_ClientDashboard
  * landing-page layout (background.png + Sign In / Know More header +
- * left form / right phone mockup). Supports inline signup toggle.
+ * left form / right phone mockup) and the floating social-media widget.
  *
  * Backend endpoints used:
  *   POST /api/client/auth/login-otp  (sends OTP)
  *   POST /api/client/auth/verify-otp (returns token)
  *   POST /api/client/auth/signup     (sends verification email — Phase 4 work)
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import {
+  Headphones,
+  Facebook,
+  Instagram,
+  Linkedin,
+  MessageCircle,
+  Youtube,
+  X,
+} from 'lucide-react';
 import { api, ApiError, setToken, getToken } from '@/lib/api';
 
 type View = 'signin' | 'signup';
 type Step = 'identifier' | 'otp';
+
+const SOCIAL_LINKS: Array<{
+  label: string;
+  href: string;
+  Icon: typeof Facebook;
+  bg: string;
+}> = [
+  { label: 'Facebook',  href: 'https://www.facebook.com/easyfixservices',  Icon: Facebook,      bg: 'bg-[#1877F2]' },
+  { label: 'Instagram', href: 'https://www.instagram.com/easyfixservices', Icon: Instagram,     bg: 'bg-[#E1306C]' },
+  { label: 'LinkedIn',  href: 'https://www.linkedin.com/company/easyfix',  Icon: Linkedin,      bg: 'bg-[#0A66C2]' },
+  { label: 'WhatsApp',  href: 'https://wa.me/919999999999',                Icon: MessageCircle, bg: 'bg-[#25D366]' },
+  { label: 'YouTube',   href: 'https://www.youtube.com/@easyfix',          Icon: Youtube,       bg: 'bg-[#FF0000]' },
+];
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,9 +52,30 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [socialOpen, setSocialOpen] = useState(false);
+  const socialRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (getToken()) router.push('/dashboard');
   }, [router]);
+
+  useEffect(() => {
+    if (!socialOpen) return;
+    function onDocMouseDown(e: MouseEvent) {
+      if (socialRef.current && !socialRef.current.contains(e.target as Node)) {
+        setSocialOpen(false);
+      }
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === 'Escape') setSocialOpen(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [socialOpen]);
 
   function switchView(v: View) {
     setView(v);
@@ -95,9 +138,9 @@ export default function LoginPage() {
       className="relative min-h-screen w-full overflow-x-hidden bg-white bg-no-repeat bg-cover bg-center"
       style={{ backgroundImage: "url('/background.png')" }}
     >
-      {/* Header — Sign In / Know More + logo */}
+      {/* Header — Sign In / Know More on the left, EasyFix logo centered over the right column */}
       <header className="relative z-10 px-4 sm:px-8 md:px-16 pt-6 md:pt-10">
-        <div className="flex items-center justify-between gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 items-center gap-4">
           <nav className="flex items-center gap-6 md:gap-14">
             <button
               type="button"
@@ -117,19 +160,21 @@ export default function LoginPage() {
               Know More
             </a>
           </nav>
-          <Image
-            src="/logoTrans.png"
-            alt="EasyFix"
-            width={220}
-            height={66}
-            priority
-            className="h-12 md:h-20 w-auto"
-          />
+          <div className="hidden md:flex justify-center">
+            <Image
+              src="/logoTrans.png"
+              alt="EasyFix"
+              width={220}
+              height={66}
+              priority
+              className="h-16 lg:h-20 w-auto"
+            />
+          </div>
         </div>
       </header>
 
       {/* Body — left form / right phone */}
-      <section className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 px-6 sm:px-10 md:px-16 mt-6 md:mt-10 pb-16">
+      <section className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 px-6 sm:px-10 md:px-16 mt-6 md:mt-8 pb-16">
         {/* Left column */}
         <div className="flex flex-col justify-center max-w-xl">
           {view === 'signin' && step === 'identifier' && (
@@ -306,7 +351,7 @@ export default function LoginPage() {
           )}
         </div>
 
-        {/* Right column — phone mockup (hidden on mobile so form has room) */}
+        {/* Right column — phone mockup (logo lives in the header, centered above this column) */}
         <div className="hidden md:flex items-center justify-center">
           <Image
             src="/mobileTrans.png"
@@ -318,6 +363,47 @@ export default function LoginPage() {
           />
         </div>
       </section>
+
+      {/* Floating social widget — fixed bottom-right, expands upward */}
+      <div
+        ref={socialRef}
+        className="fixed bottom-6 right-6 z-50 flex flex-col items-center gap-3"
+      >
+        {/* Expanding icon stack — sits above the trigger; expands upward via opacity + translate */}
+        <div
+          className={`flex flex-col items-center gap-3 transition-all duration-300 ease-out ${
+            socialOpen
+              ? 'opacity-100 translate-y-0 pointer-events-auto'
+              : 'opacity-0 translate-y-4 pointer-events-none'
+          }`}
+          aria-hidden={!socialOpen}
+        >
+          {SOCIAL_LINKS.map(({ label, href, Icon, bg }, i) => (
+            <a
+              key={label}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={label}
+              className={`w-11 h-11 rounded-full ${bg} text-white flex items-center justify-center shadow-lg hover:scale-110 active:scale-95 transition-transform`}
+              style={{ transitionDelay: socialOpen ? `${i * 40}ms` : '0ms' }}
+            >
+              <Icon className="w-5 h-5" strokeWidth={2} />
+            </a>
+          ))}
+        </div>
+
+        {/* Trigger button */}
+        <button
+          type="button"
+          onClick={() => setSocialOpen((v) => !v)}
+          aria-label={socialOpen ? 'Close contact options' : 'Open contact options'}
+          aria-expanded={socialOpen}
+          className="w-14 h-14 rounded-full bg-white text-[#d9212b] shadow-xl ring-1 ring-[#d9212b]/20 hover:scale-105 active:scale-95 transition flex items-center justify-center"
+        >
+          {socialOpen ? <X className="w-6 h-6" /> : <Headphones className="w-6 h-6" />}
+        </button>
+      </div>
     </main>
   );
 }
