@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { api, ApiError } from '@/lib/api';
+import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { STATUS_LABELS, formatDate } from '@/lib/utils';
 
 type Job = {
@@ -30,24 +30,20 @@ const TABS = [
 export default function JobsPage() {
   const [tab, setTab] = useState<string>('all');
   const [q, setQ] = useState('');
-  const [items, setItems] = useState<Job[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const debouncedQ = useDebouncedValue(q, 300);
 
-  useEffect(() => {
+  const fetchPath = useMemo(() => {
     const status = TABS.find((t) => t.key === tab)?.status;
-    const search = q.trim();
-    setLoading(true); setError(null);
     const params = new URLSearchParams();
     if (status != null) params.set('status', String(status));
-    if (search) params.set('q', search);
+    if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
     params.set('limit', '100');
-    api.get<{ items: Job[]; total: number }>(`/jobs?${params}`)
-      .then((r) => { setItems(r.items); setTotal(r.total); })
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed'))
-      .finally(() => setLoading(false));
-  }, [tab, q]);
+    return `/jobs?${params}`;
+  }, [tab, debouncedQ]);
+
+  const { data, error, loading } = useFetch<{ items: Job[]; total: number }>(fetchPath);
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
 
   return (
     <div className="space-y-4">

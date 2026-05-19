@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
+import { useFetchOnce } from '@/lib/hooks';
 import { STATUS_LABELS, formatDate } from '@/lib/utils';
 
 type Job = {
@@ -49,56 +50,54 @@ type EstimatePreview = {
 export default function JobDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
-  const [job, setJob] = useState<Job | null>(null);
-  const [estimate, setEstimate] = useState<EstimatePreview | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  // useFetchOnce keyed by path — Strict-Mode safe, refetches if id changes,
+  // and exposes a `reload()` for post-approval/rejection refreshes.
+  const job = useFetchOnce<Job>(id ? `/jobs/${id}` : null);
+  const estimate = useFetchOnce<EstimatePreview>(id ? `/jobs/${id}/estimate-preview` : null);
+
   const [acting, setActing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [actError, setActError] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
 
-  async function load() {
-    setLoading(true); setError(null);
-    try {
-      const j = await api.get<Job>(`/jobs/${id}`);
-      setJob(j);
-      try {
-        const e = await api.get<EstimatePreview>(`/jobs/${id}/estimate-preview`);
-        setEstimate(e);
-      } catch { /* no estimate yet — fine */ }
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load job');
-    } finally { setLoading(false); }
+  async function reloadBoth() {
+    // Refresh both records after an approve/reject. The estimate endpoint
+    // may legitimately 404 (not all jobs have one), so swallow its error.
+    await Promise.allSettled([job.reload(), estimate.reload()]);
   }
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [id]);
 
   async function approve() {
-    setActing(true); setError(null);
+    setActing(true); setActError(null);
     try {
       await api.patch(`/jobs/${id}/estimate/approve`, {});
-      await load();
+      await reloadBoth();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Approve failed');
+      setActError(err instanceof ApiError ? err.message : 'Approve failed');
     } finally { setActing(false); }
   }
   async function reject() {
-    if (rejectReason.trim().length < 3) { setError('Reason required (min 3 chars)'); return; }
-    setActing(true); setError(null);
+    if (rejectReason.trim().length < 3) { setActError('Reason required (min 3 chars)'); return; }
+    setActing(true); setActError(null);
     try {
       await api.patch(`/jobs/${id}/estimate/reject`, { reason: rejectReason.trim() });
       setShowReject(false);
       setRejectReason('');
-      await load();
+      await reloadBoth();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Reject failed');
+      setActError(err instanceof ApiError ? err.message : 'Reject failed');
     } finally { setActing(false); }
   }
 
-  if (loading) return <div className="text-slate-500">Loading…</div>;
-  if (!job) return <div className="text-red-600">{error || 'Job not found'}</div>;
+  if (job.loading) return <div className="text-slate-500">Loading…</div>;
+  if (!job.data) return <div className="text-red-600">{job.error || actError || 'Job not found'}</div>;
 
-  const showActions = !job.approved_on_date_time && !job.approval_reject_date_time
-    && estimate && !estimate.already_approved && !estimate.already_rejected;
+  const jobData = job.data;
+  const estimateData = estimate.data;
+  const error = actError;
+
+  const showActions = !jobData.approved_on_date_time && !jobData.approval_reject_date_time
+    && estimateData && !estimateData.already_approved && !estimateData.already_rejected;
 
   return (
     <div className="space-y-4 max-w-4xl">
@@ -107,32 +106,32 @@ export default function JobDetailPage() {
       <div className="card p-4 space-y-2">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h1 className="text-xl font-bold">Job #{job.job_id}</h1>
-            <p className="text-sm text-slate-600 font-mono">{job.job_reference_id || job.client_ref_id}</p>
+            <h1 className="text-xl font-bold">Job #{jobData.job_id}</h1>
+            <p className="text-sm text-slate-600 font-mono">{jobData.job_reference_id || jobData.client_ref_id}</p>
           </div>
-          <span className="badge bg-blue-50 text-blue-700">{STATUS_LABELS[job.job_status] || job.job_status}</span>
+          <span className="badge bg-blue-50 text-blue-700">{STATUS_LABELS[jobData.job_status] || jobData.job_status}</span>
         </div>
-        {job.job_desc && <p className="text-sm text-slate-700">{job.job_desc}</p>}
+        {jobData.job_desc && <p className="text-sm text-slate-700">{jobData.job_desc}</p>}
         <dl className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-2 border-t">
-          <Field label="Customer" value={`${job.customer_name} · ${job.customer_mob_no}`} />
-          <Field label="City" value={job.city_name} />
-          <Field label="Easyfixer" value={job.easyfixer_name || '—'} />
-          <Field label="Requested" value={formatDate(job.requested_date_time)} />
-          <Field label="Scheduled" value={formatDate(job.scheduled_date_time)} />
-          <Field label="Owner" value={job.owner_name || '—'} />
+          <Field label="Customer" value={`${jobData.customer_name} · ${jobData.customer_mob_no}`} />
+          <Field label="City" value={jobData.city_name} />
+          <Field label="Easyfixer" value={jobData.easyfixer_name || '—'} />
+          <Field label="Requested" value={formatDate(jobData.requested_date_time)} />
+          <Field label="Scheduled" value={formatDate(jobData.scheduled_date_time)} />
+          <Field label="Owner" value={jobData.owner_name || '—'} />
         </dl>
       </div>
 
-      {estimate && (
+      {estimateData && (
         <div className="card p-4">
           <div className="flex justify-between items-center mb-3">
             <h2 className="font-semibold">Estimate</h2>
             <div className="text-sm text-slate-500">
-              {estimate.already_approved && '✓ Approved'}
-              {estimate.already_rejected && '✗ Rejected'}
+              {estimateData.already_approved && '✓ Approved'}
+              {estimateData.already_rejected && '✗ Rejected'}
             </div>
           </div>
-          {estimate.services.length === 0 ? (
+          {estimateData.services.length === 0 ? (
             <p className="text-sm text-slate-500 py-6 text-center">
               No services are currently awaiting approval on this job.
             </p>
@@ -142,7 +141,7 @@ export default function JobDetailPage() {
                 <tr><th>Service</th><th className="!text-right">Qty</th><th className="!text-right">Unit</th><th className="!text-right">Material</th><th className="!text-right">Line Total</th></tr>
               </thead>
               <tbody>
-                {estimate.services.map((s) => (
+                {estimateData.services.map((s) => (
                   <tr key={s.job_service_id}>
                     <td>{s.service_name || '—'}</td>
                     <td className="text-right font-mono">{Number(s.quantity)}</td>
@@ -153,13 +152,13 @@ export default function JobDetailPage() {
                 ))}
                 <tr className="bg-slate-50 font-semibold">
                   <td colSpan={4} className="text-right">Grand Total</td>
-                  <td className="text-right font-mono">{Number(estimate.totals.grand_total).toFixed(2)}</td>
+                  <td className="text-right font-mono">{Number(estimateData.totals.grand_total).toFixed(2)}</td>
                 </tr>
               </tbody>
             </table>
           )}
 
-          {showActions && estimate.services.length > 0 && (
+          {showActions && estimateData.services.length > 0 && (
             <div className="flex gap-2 mt-4 pt-3 border-t">
               <button onClick={approve} disabled={acting} className="btn-primary">
                 {acting ? 'Working…' : '✓ Approve Estimate'}

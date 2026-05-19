@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useFetchOnce } from '@/lib/hooks';
 
 type Profile = {
   id: number;
@@ -14,19 +15,18 @@ type Profile = {
 };
 
 export default function ProfilePage() {
+  const { data, error: fetchError, loading } = useFetchOnce<Profile>('/profile');
   const [p, setP] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Mirror the fetched profile into a local editable copy whenever the
+  // fetch settles. (The hook handles dedup + Strict Mode for us.)
   useEffect(() => {
-    (async () => {
-      try { setP(await api.get<Profile>('/profile')); }
-      catch (err) { setError(err instanceof ApiError ? err.message : 'Failed'); }
-      finally { setLoading(false); }
-    })();
-  }, []);
+    if (data) setP(data);
+    if (fetchError) setError(fetchError);
+  }, [data, fetchError]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();

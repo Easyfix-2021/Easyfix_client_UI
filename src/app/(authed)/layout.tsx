@@ -175,10 +175,6 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
             <Menu className="w-5 h-5" />
           </button>
 
-          <h2 className="text-sm md:text-base font-semibold text-slate-700 hidden sm:block">
-            EasyFix Client Portal
-          </h2>
-
           <div className="ml-auto flex items-center gap-3 md:gap-5">
             <button
               type="button"

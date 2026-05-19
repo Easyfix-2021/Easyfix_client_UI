@@ -38,12 +38,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body?.data as T;
 }
 
+// All verbs accept an optional `init` (RequestInit) so callers can pass
+// e.g. an AbortSignal — `useFetch` in @/lib/hooks relies on this to
+// cancel in-flight requests when component deps change or unmount.
 export const api = {
-  get:    <T>(p: string)            => request<T>(p),
-  post:   <T>(p: string, body: any) => request<T>(p, { method: 'POST',   body: JSON.stringify(body) }),
-  put:    <T>(p: string, body: any) => request<T>(p, { method: 'PUT',    body: JSON.stringify(body) }),
-  patch:  <T>(p: string, body: any) => request<T>(p, { method: 'PATCH',  body: JSON.stringify(body) }),
-  delete: <T>(p: string)            => request<T>(p, { method: 'DELETE' }),
+  get:    <T>(p: string,            init?: RequestInit) => request<T>(p, init),
+  post:   <T>(p: string, body: any, init?: RequestInit) => request<T>(p, { ...init, method: 'POST',   body: JSON.stringify(body) }),
+  put:    <T>(p: string, body: any, init?: RequestInit) => request<T>(p, { ...init, method: 'PUT',    body: JSON.stringify(body) }),
+  patch:  <T>(p: string, body: any, init?: RequestInit) => request<T>(p, { ...init, method: 'PATCH',  body: JSON.stringify(body) }),
+  delete: <T>(p: string,            init?: RequestInit) => request<T>(p, { ...init, method: 'DELETE' }),
 };
 
 // Download blob (used by /export/jobs to trigger Excel download).

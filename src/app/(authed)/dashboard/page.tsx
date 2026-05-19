@@ -16,7 +16,7 @@ import {
   Plus, Upload, Download, AlertTriangle, Search,
   ChevronLeft, ChevronRight, Star,
 } from 'lucide-react';
-import { api, ApiError } from '@/lib/api';
+import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { STATUS_LABELS } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -82,53 +82,42 @@ function formatAppt(iso: string | null) {
 export default function OrderHistoryPage() {
   const [tab, setTab] = useState<TabKey>('all');
   const [q, setQ] = useState('');
-  const [items, setItems] = useState<Job[]>([]);
-  const [total, setTotal] = useState(0);
+  const debouncedQ = useDebouncedValue(q, 300);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  // Reset to page 1 whenever tab/search/pageSize change
-  useEffect(() => { setPage(1); }, [tab, q, pageSize]);
+  // Reset to page 1 whenever tab/debouncedSearch/pageSize change
+  useEffect(() => { setPage(1); }, [tab, debouncedQ, pageSize]);
 
-  useEffect(() => {
-    const cur = TABS.find((t) => t.key === tab);
-    const search = q.trim();
-    setLoading(true); setError(null);
+  const currentTab = useMemo(() => TABS.find((t) => t.key === tab) ?? TABS[0], [tab]);
+  const statuses = currentTab.statuses ?? null;
 
+  // Build the URL declaratively — useFetch handles the fetch + abort lifecycle
+  const fetchPath = useMemo(() => {
     const params = new URLSearchParams();
-    // Backend supports a single status param. Use the first status of the
-    // tab; if multiple, we fall back to fetching the wider set and let the
-    // client filter (typical for the 2-status Completed tab).
-    const statuses = cur?.statuses ?? null;
-    if (statuses && statuses.length === 1) {
-      params.set('status', String(statuses[0]));
-    }
-    if (search) params.set('q', search);
+    if (statuses && statuses.length === 1) params.set('status', String(statuses[0]));
+    if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
     params.set('limit', String(pageSize));
     params.set('offset', String((page - 1) * pageSize));
+    return `/jobs?${params}`;
+  }, [statuses, debouncedQ, pageSize, page]);
 
-    api.get<{ items: Job[]; total: number }>(`/jobs?${params}`)
-      .then((r) => {
-        let rows = r.items ?? [];
-        // If the tab needs multi-status filtering (Completed = 3 or 5),
-        // narrow the result client-side.
-        if (statuses && statuses.length > 1) {
-          rows = rows.filter((j) => statuses.includes(j.job_status));
-        }
-        setItems(rows);
-        setTotal(r.total ?? rows.length);
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load orders'))
-      .finally(() => setLoading(false));
-  }, [tab, q, page, pageSize]);
+  const { data, error, loading } = useFetch<{ items: Job[]; total: number }>(fetchPath);
+
+  // Client-side narrow for tabs whose backend status filter is single-value
+  // (Completed tab needs status 3 OR 5; backend only takes one at a time).
+  const items = useMemo(() => {
+    const rows = data?.items ?? [];
+    if (statuses && statuses.length > 1) {
+      return rows.filter((j) => statuses.includes(j.job_status));
+    }
+    return rows;
+  }, [data, statuses]);
+  const total = data?.total ?? items.length;
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const firstIdx = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const lastIdx = Math.min(page * pageSize, total);
-
-  const currentTab = useMemo(() => TABS.find((t) => t.key === tab)!, [tab]);
 
   return (
     <div className="space-y-5">
