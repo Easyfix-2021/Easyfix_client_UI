@@ -149,9 +149,9 @@ export default function OrderHistoryPage() {
           <Link href="/export" className="btn-outline">
             <Download className="w-4 h-4" /> Export
           </Link>
-          <button type="button" className="btn-primary" title="Add a new order (coming soon)">
-            <Plus className="w-4 h-4" /> Add Order
-          </button>
+          <Link href="/jobs/new" className="btn-primary" title="Raise a new technician booking">
+            <Plus className="w-4 h-4" /> New Orders
+          </Link>
         </div>
       </div>
 

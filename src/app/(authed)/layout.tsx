@@ -8,8 +8,9 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, getToken, setToken } from '@/lib/api';
+import { SpocContext, type Spoc } from '@/lib/spoc-context';
 import {
   History,
   Ticket,
@@ -26,8 +27,6 @@ import {
   Menu,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-type Spoc = { id: number; contact_name: string; client_id: number; email?: string };
 
 type NavItem = {
   href?: string;
@@ -67,8 +66,15 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
   const [spoc, setSpoc] = useState<Spoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const bootedRef = useRef(false);
 
   useEffect(() => {
+    // Guard against React 18 Strict Mode's dev-only double-effect-invocation
+    // (refs persist across the simulated unmount/remount cycle, so this
+    // becomes a true once-per-mount fetch).
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+
     if (!getToken()) { router.push('/'); return; }
     (async () => {
       try {
@@ -111,6 +117,7 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
   const initials = initialsOf(spoc?.contact_name);
 
   return (
+    <SpocContext.Provider value={spoc}>
     <div className="min-h-screen flex bg-slate-50">
       {/* Sidebar */}
       <aside
@@ -215,6 +222,7 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
         <main className="flex-1 p-4 md:p-6 overflow-auto">{children}</main>
       </div>
     </div>
+    </SpocContext.Provider>
   );
 }
 
