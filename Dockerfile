@@ -95,11 +95,11 @@ COPY --from=builder --chown=node:node /app/public ./public
 
 EXPOSE 5181
 
-# Probe the root path — Client_UI's sign-in page is rendered by
-# `app/page.tsx` (no /login route), so `/` returns 200 with the login HTML
-# for unauthenticated requests.
+# Probe the dedicated /healthcheck route handler — returns 200 with a
+# tiny JSON body when the Next.js server is responsive. Cheaper than
+# probing `/` (no React rendering) and side-effect-free.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:5181/ -O /dev/null || exit 1
+    CMD wget -qO- http://127.0.0.1:5181/healthcheck -O /dev/null || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
 # server.js comes from the standalone output. It's the production server

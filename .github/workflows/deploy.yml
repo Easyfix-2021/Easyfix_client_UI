@@ -350,19 +350,20 @@ jobs:
           set -euo pipefail
           INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
 
-          # Next.js cold-start is ~10–20s. Compose start_period is 45s,
+          # Next.js cold-start is ~10–20s. Compose start_period is 60s,
           # so we give the smoke test ~70s total before declaring failure
           # and dump container logs to save a debug round-trip. Probes
-          # `/` because Client_UI's login page is at the root (app/page.tsx
-          # — no /login route, unlike CRM_UI).
+          # the dedicated /healthcheck JSON endpoint (defined in
+          # src/app/healthcheck/route.ts) — faster than rendering `/`
+          # and gives a clear contract for external monitors.
           SMOKE_SCRIPT='set -e
           echo "Waiting 10s for cold start before probing…"; sleep 10
           for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5181/ || echo 000)
-            if [[ "$code" =~ ^[23] ]]; then echo "✓ / → $code"; exit 0; fi
-            echo "Attempt $i: / → $code, retrying in 5s…"; sleep 5
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5181/healthcheck || echo 000)
+            if [[ "$code" == "200" ]]; then echo "✓ /healthcheck → $code"; exit 0; fi
+            echo "Attempt $i: /healthcheck → $code, retrying in 5s…"; sleep 5
           done
-          echo "✗ / never returned 2xx/3xx"
+          echo "✗ /healthcheck never returned 200"
           echo "── docker compose ps ──"
           sudo docker compose -f /opt/easyfix/docker-compose.yml ps 2>&1 || true
           echo "── easyfix-client-ui logs (tail 80) ──"
