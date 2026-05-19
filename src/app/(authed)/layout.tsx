@@ -1,19 +1,72 @@
 'use client';
 
+/*
+ * Authed shell — red/white theme, replicates the legacy
+ * Angular_ClientDashboard sidebar (2 sections, 11 menu items) plus a
+ * top navbar with notifications and user avatar.
+ */
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError, getToken, setToken } from '@/lib/api';
-import { LayoutDashboard, Briefcase, FileSpreadsheet, User as UserIcon, LogOut } from 'lucide-react';
+import {
+  History,
+  Ticket,
+  Clock4,
+  CalendarCheck,
+  MapPin,
+  ClipboardCheck,
+  ReceiptText,
+  Users,
+  HardHat,
+  ExternalLink,
+  LogOut,
+  Bell,
+  Menu,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-type Spoc = { id: number; contact_name: string; client_id: number };
+type Spoc = { id: number; contact_name: string; client_id: number; email?: string };
+
+type NavItem = {
+  href?: string;
+  externalHref?: string;
+  label: string;
+  icon: typeof History;
+  match?: string[];
+};
+
+const SECTION_ONE: NavItem[] = [
+  { href: '/dashboard',           label: 'History',                 icon: History, match: ['/jobs'] },
+  { href: '/tickets/new',         label: 'New Tickets',             icon: Ticket },
+  { href: '/tickets/approvals',   label: 'Client Delay',            icon: Clock4 },
+  { href: '/appointments',        label: 'Committed Appointments',  icon: CalendarCheck },
+  { href: '/tx-location',         label: 'Tx on Location',          icon: MapPin },
+  { href: '/tickets/under-audit', label: 'Completed & Under Audit', icon: ClipboardCheck },
+  { href: '/ratecard',            label: 'Get My RateCard',         icon: ReceiptText },
+];
+
+const SECTION_TWO: NavItem[] = [
+  { href: '/team',         label: 'My Team',         icon: Users },
+  { href: '/technicians',  label: 'My Technicians',  icon: HardHat },
+  { externalHref: 'https://www.easyfix.in/our-team', label: 'Connect Us', icon: ExternalLink },
+];
+
+function initialsOf(name?: string) {
+  if (!name) return 'U';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'U';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 export default function AuthedLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [spoc, setSpoc] = useState<Spoc | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     if (!getToken()) { router.push('/'); return; }
@@ -30,57 +83,169 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
   }, [router]);
 
   async function logout() {
-    // Clear the httpOnly cookie server-side (shared logout clears every
-    // known auth cookie name) AND wipe the Bearer token from localStorage.
     try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); }
-    catch { /* network failure is ok — we still wipe local state */ }
+    catch { /* network failure is ok */ }
     setToken(null);
     router.push('/');
   }
 
-  const nav = [
-    { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { href: '/jobs',      label: 'Jobs',      icon: Briefcase },
-    { href: '/export',    label: 'Export',    icon: FileSpreadsheet },
-    { href: '/profile',   label: 'Profile',   icon: UserIcon },
-  ];
+  const isActive = useMemo(
+    () => (item: NavItem) => {
+      if (!item.href) return false;
+      if (pathname === item.href) return true;
+      if (pathname.startsWith(item.href + '/')) return true;
+      if (item.match?.some((m) => pathname === m || pathname.startsWith(m + '/'))) return true;
+      return false;
+    },
+    [pathname]
+  );
 
-  if (loading) return <main className="p-8 text-center text-slate-500">Loading…</main>;
+  if (loading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center text-slate-500">
+        Loading…
+      </main>
+    );
+  }
+
+  const initials = initialsOf(spoc?.contact_name);
 
   return (
-    <div className="min-h-screen flex">
-      <aside className="w-56 bg-slate-900 text-slate-100 flex flex-col">
-        <div className="px-4 py-5 border-b border-slate-800">
-          <h1 className="text-xl font-bold">EasyFix</h1>
-          <p className="text-xs text-slate-400">Client Portal</p>
+    <div className="min-h-screen flex bg-slate-50">
+      {/* Sidebar */}
+      <aside
+        className={cn(
+          'fixed md:static inset-y-0 left-0 z-40 flex flex-col transition-all duration-200',
+          'bg-gradient-to-b from-[#d9212b] via-[#b91c1c] to-[#7f1d1d] text-white shadow-2xl',
+          sidebarOpen ? 'w-64' : 'w-0 md:w-16 overflow-hidden'
+        )}
+      >
+        {/* Brand */}
+        <div className="px-4 py-5 flex items-center gap-3 border-b border-white/15">
+          <div className="bg-white rounded-md p-1.5 shrink-0">
+            <Image src="/logoTrans.png" alt="EasyFix" width={120} height={36} className="h-7 w-auto" />
+          </div>
+          {sidebarOpen && (
+            <div className="min-w-0">
+              <div className="text-xs uppercase tracking-wider text-white/70">Service Dashboard</div>
+              <div className="text-sm font-semibold truncate">Client #{spoc?.client_id ?? '—'}</div>
+            </div>
+          )}
         </div>
-        <nav className="flex-1 px-2 py-3 space-y-1">
-          {nav.map((n) => {
-            const active = pathname.startsWith(n.href);
-            const Icon = n.icon;
-            return (
-              <Link
-                key={n.href}
-                href={n.href}
-                className={cn(
-                  'flex items-center gap-2 px-3 py-2 rounded text-sm',
-                  active ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'
-                )}
-              >
-                <Icon className="w-4 h-4" /> {n.label}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="px-3 py-3 border-t border-slate-800 text-sm">
-          <div className="font-medium truncate">{spoc?.contact_name}</div>
-          <div className="text-xs text-slate-400">Client #{spoc?.client_id}</div>
-          <button onClick={logout} className="mt-2 flex items-center gap-1 text-xs text-slate-300 hover:text-white">
-            <LogOut className="w-3.5 h-3.5" /> Logout
+
+        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
+          {SECTION_ONE.map((item) => (
+            <SidebarLink key={item.label} item={item} active={isActive(item)} collapsed={!sidebarOpen} />
+          ))}
+
+          <div className="my-3 border-t border-white/15" />
+
+          {SECTION_TWO.map((item) => (
+            <SidebarLink key={item.label} item={item} active={isActive(item)} collapsed={!sidebarOpen} />
+          ))}
+
+          <button
+            type="button"
+            onClick={logout}
+            title={!sidebarOpen ? 'Logout' : undefined}
+            className={cn(
+              'mt-1 w-full flex items-center gap-3 px-3 py-2 rounded text-sm transition',
+              'text-white/85 hover:bg-white/10 hover:text-white'
+            )}
+          >
+            <LogOut className="w-4 h-4 shrink-0" />
+            {sidebarOpen && <span>Logout</span>}
           </button>
-        </div>
+        </nav>
       </aside>
-      <main className="flex-1 p-6 overflow-auto">{children}</main>
+
+      {/* Main column: navbar + content */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="sticky top-0 z-30 h-16 bg-white border-b border-slate-200 flex items-center px-4 md:px-6 gap-4">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((v) => !v)}
+            aria-label="Toggle sidebar"
+            className="p-2 rounded hover:bg-slate-100 text-slate-700"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
+          <h2 className="text-sm md:text-base font-semibold text-slate-700 hidden sm:block">
+            EasyFix Client Portal
+          </h2>
+
+          <div className="ml-auto flex items-center gap-3 md:gap-5">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="relative p-2 rounded hover:bg-slate-100 text-slate-700"
+            >
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-1 right-1 inline-flex h-2 w-2 rounded-full bg-primary" />
+            </button>
+
+            <Link
+              href="/profile"
+              className="flex items-center gap-2 hover:opacity-90"
+              aria-label="Open profile"
+            >
+              <span className="w-9 h-9 rounded-full bg-primary text-white font-bold flex items-center justify-center text-sm ring-2 ring-primary/20">
+                {initials}
+              </span>
+              <span className="hidden md:block text-sm leading-tight">
+                <span className="block font-semibold text-slate-800 truncate max-w-[160px]">
+                  {spoc?.contact_name ?? 'User'}
+                </span>
+                <span className="block text-xs text-slate-500 truncate max-w-[160px]">
+                  {spoc?.email ?? `Client #${spoc?.client_id ?? '—'}`}
+                </span>
+              </span>
+            </Link>
+          </div>
+        </header>
+
+        <main className="flex-1 p-4 md:p-6 overflow-auto">{children}</main>
+      </div>
     </div>
+  );
+}
+
+function SidebarLink({
+  item, active, collapsed,
+}: { item: NavItem; active: boolean; collapsed: boolean }) {
+  const Icon = item.icon;
+
+  const className = cn(
+    'flex items-center gap-3 px-3 py-2 rounded text-sm transition',
+    active
+      ? 'bg-white text-primary font-semibold shadow-sm'
+      : 'text-white/90 hover:bg-white/10 hover:text-white'
+  );
+
+  if (item.externalHref) {
+    return (
+      <a
+        href={item.externalHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={className}
+        title={collapsed ? item.label : undefined}
+      >
+        <Icon className="w-4 h-4 shrink-0" />
+        {!collapsed && <span className="truncate">{item.label}</span>}
+      </a>
+    );
+  }
+
+  return (
+    <Link
+      href={item.href!}
+      className={className}
+      title={collapsed ? item.label : undefined}
+    >
+      <Icon className="w-4 h-4 shrink-0" />
+      {!collapsed && <span className="truncate">{item.label}</span>}
+    </Link>
   );
 }
