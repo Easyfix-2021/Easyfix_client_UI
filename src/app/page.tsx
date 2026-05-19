@@ -1,26 +1,46 @@
 'use client';
 
 /*
- * Client SPOC login — 2-step OTP flow. Mirrors the CRM_UI login UX.
- * Backend endpoints: POST /api/client/auth/login-otp (sends OTP),
- *                    POST /api/client/auth/verify-otp (returns token).
+ * Client SPOC login — replicates the legacy Angular_ClientDashboard
+ * landing-page layout (background.png + Sign In / Know More header +
+ * left form / right phone mockup). Supports inline signup toggle.
+ *
+ * Backend endpoints used:
+ *   POST /api/client/auth/login-otp  (sends OTP)
+ *   POST /api/client/auth/verify-otp (returns token)
+ *   POST /api/client/auth/signup     (sends verification email — Phase 4 work)
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { api, ApiError, setToken, getToken } from '@/lib/api';
+
+type View = 'signin' | 'signup';
+type Step = 'identifier' | 'otp';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [step, setStep] = useState<'identifier' | 'otp'>('identifier');
+  const [view, setView] = useState<View>('signin');
+  const [step, setStep] = useState<Step>('identifier');
   const [identifier, setIdentifier] = useState('');
-  const [otp, setOtp] = useState(['', '', '', '']);
+  const [otp, setOtp] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [email, setEmail] = useState('');
+  const [signupSent, setSignupSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const otpInputs = useRef<HTMLInputElement[]>([]);
 
   useEffect(() => {
     if (getToken()) router.push('/dashboard');
   }, [router]);
+
+  function switchView(v: View) {
+    setView(v);
+    setStep('identifier');
+    setOtp('');
+    setError(null);
+    setSignupSent(false);
+  }
 
   async function sendOtp(e?: React.FormEvent) {
     e?.preventDefault();
@@ -28,108 +48,276 @@ export default function LoginPage() {
     try {
       await api.post<{ delivered: boolean }>('/auth/login-otp', { identifier: identifier.trim() });
       setStep('otp');
-      setTimeout(() => otpInputs.current[0]?.focus(), 50);
+      setOtp('');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to send OTP');
     } finally { setLoading(false); }
   }
 
-  async function verifyOtp(otpString: string) {
+  async function verifyOtp(value?: string) {
+    const otpStr = (value ?? otp).trim();
+    if (otpStr.length !== 4) return;
     setError(null); setLoading(true);
     try {
       const res = await api.post<{ token: string }>('/auth/verify-otp', {
         identifier: identifier.trim(),
-        otp: Number(otpString),
+        otp: Number(otpStr),
       });
       setToken(res.token);
       router.push('/dashboard');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Invalid OTP');
-      setOtp(['', '', '', '']);
-      otpInputs.current[0]?.focus();
+      setOtp('');
     } finally { setLoading(false); }
   }
 
-  function onOtpChange(idx: number, val: string) {
-    const digit = val.replace(/\D/g, '').slice(-1);
-    const next = [...otp];
-    next[idx] = digit;
-    setOtp(next);
-    if (digit && idx < 3) otpInputs.current[idx + 1]?.focus();
-    if (next.every((d) => d) && next.join('').length === 4) {
-      void verifyOtp(next.join(''));
+  function onOtpChange(val: string) {
+    const clean = val.replace(/\D/g, '').slice(0, 4);
+    setOtp(clean);
+    if (clean.length === 4) {
+      setTimeout(() => void verifyOtp(clean), 60);
     }
   }
 
-  function onOtpPaste(e: React.ClipboardEvent<HTMLInputElement>) {
-    const txt = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 4);
-    if (txt.length === 4) {
-      e.preventDefault();
-      const split = txt.split('');
-      setOtp(split);
-      void verifyOtp(txt);
-    }
+  async function submitSignup(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError(null); setLoading(true);
+    try {
+      await api.post('/auth/signup', { clientId: clientId.trim(), email: email.trim() });
+      setSignupSent(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Signup failed. Please contact your account manager.');
+    } finally { setLoading(false); }
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-md card p-6">
-        <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-primary">EasyFix</h1>
-          <p className="text-sm text-slate-600">Client SPOC Portal</p>
+    <main
+      className="relative min-h-screen w-full overflow-x-hidden bg-white bg-no-repeat bg-cover bg-center"
+      style={{ backgroundImage: "url('/background.png')" }}
+    >
+      {/* Header — Sign In / Know More + logo */}
+      <header className="relative z-10 px-4 sm:px-8 md:px-16 pt-6 md:pt-10">
+        <div className="flex items-center justify-between gap-4">
+          <nav className="flex items-center gap-6 md:gap-14">
+            <button
+              type="button"
+              onClick={() => switchView('signin')}
+              className={`text-white text-xl md:text-3xl font-medium tracking-wide pb-1 transition border-b-2 ${
+                view === 'signin' ? 'border-white' : 'border-transparent hover:border-white/60'
+              }`}
+            >
+              Sign In
+            </button>
+            <a
+              href="https://www.easyfix.in/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-white text-xl md:text-3xl font-medium tracking-wide pb-1 border-b-2 border-transparent hover:border-white/60 transition"
+            >
+              Know More
+            </a>
+          </nav>
+          <Image
+            src="/logoTrans.png"
+            alt="EasyFix"
+            width={220}
+            height={66}
+            priority
+            className="h-12 md:h-20 w-auto"
+          />
+        </div>
+      </header>
+
+      {/* Body — left form / right phone */}
+      <section className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 px-6 sm:px-10 md:px-16 mt-6 md:mt-10 pb-16">
+        {/* Left column */}
+        <div className="flex flex-col justify-center max-w-xl">
+          {view === 'signin' && step === 'identifier' && (
+            <>
+              <h1 className="text-white font-extrabold text-3xl md:text-5xl leading-tight tracking-wide">
+                Power up your customer support
+              </h1>
+              <p className="text-white text-lg md:text-2xl font-medium mt-6 md:mt-8">
+                Easyfix is trusted by over 100,000 customers
+              </p>
+
+              <form onSubmit={sendOtp} className="mt-8 md:mt-10 space-y-5 max-w-md">
+                <input
+                  autoFocus
+                  type="text"
+                  className="w-full rounded-xl px-4 py-4 text-base bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-white/80 shadow"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  placeholder="Registered Mobile Number or Email Address"
+                />
+                {error && <p className="text-white font-semibold">{error}</p>}
+                <button
+                  type="submit"
+                  disabled={loading || !identifier.trim()}
+                  className="rounded-xl bg-white/95 text-[#d9212b] font-bold px-12 py-3 text-base hover:bg-white transition disabled:opacity-60 disabled:cursor-not-allowed shadow"
+                >
+                  {loading ? 'Sending OTP…' : 'Send OTP'}
+                </button>
+              </form>
+
+              <p className="text-white mt-6 max-w-md">
+                Not a member ?{' '}
+                <button
+                  type="button"
+                  onClick={() => switchView('signup')}
+                  className="text-white font-bold underline underline-offset-2"
+                >
+                  Signup Now
+                </button>
+              </p>
+            </>
+          )}
+
+          {view === 'signin' && step === 'otp' && (
+            <>
+              <h1 className="text-white font-extrabold text-3xl md:text-5xl leading-tight tracking-wide">
+                Verify your OTP
+              </h1>
+              <p className="text-white text-base md:text-xl font-medium mt-4">
+                We sent a 4-digit code to <span className="font-bold">{identifier}</span>
+              </p>
+
+              <form onSubmit={(e) => { e.preventDefault(); void verifyOtp(); }} className="mt-8 md:mt-10 space-y-5 max-w-md">
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  maxLength={4}
+                  type="text"
+                  className="w-full rounded-xl px-4 py-4 text-2xl tracking-[0.6em] text-center font-bold bg-white text-slate-900 placeholder:text-slate-400 placeholder:tracking-normal placeholder:text-base placeholder:font-normal outline-none focus:ring-2 focus:ring-white/80 shadow"
+                  value={otp}
+                  onChange={(e) => onOtpChange(e.target.value)}
+                  placeholder="Enter OTP"
+                />
+                {error && <p className="text-white font-semibold">{error}</p>}
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => { setStep('identifier'); setOtp(''); setError(null); }}
+                    className="text-white/90 hover:text-white text-sm md:text-base"
+                  >
+                    ← Change number
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendOtp()}
+                    disabled={loading}
+                    className="text-white font-bold underline underline-offset-2 text-sm md:text-base disabled:opacity-50"
+                  >
+                    Resend OTP
+                  </button>
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading || otp.length !== 4}
+                  className="rounded-xl bg-white/95 text-[#d9212b] font-bold px-12 py-3 text-base hover:bg-white transition disabled:opacity-60 disabled:cursor-not-allowed shadow"
+                >
+                  {loading ? 'Verifying…' : 'Sign In'}
+                </button>
+              </form>
+            </>
+          )}
+
+          {view === 'signup' && !signupSent && (
+            <>
+              <h1 className="text-white font-extrabold text-3xl md:text-5xl leading-tight tracking-wide">
+                Create Account
+              </h1>
+              <p className="text-white text-base md:text-lg mt-4 max-w-md">
+                Enter your Client ID and registered email to receive a verification link.
+              </p>
+
+              <form onSubmit={submitSignup} className="mt-8 md:mt-10 space-y-4 max-w-md">
+                <input
+                  autoFocus
+                  type="text"
+                  className="w-full rounded-xl px-4 py-4 text-base bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-white/80 shadow"
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  placeholder="Client Id"
+                />
+                <input
+                  type="email"
+                  className="w-full rounded-xl px-4 py-4 text-base bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-white/80 shadow"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Email Id"
+                />
+                {error && <p className="text-white font-semibold">{error}</p>}
+                <button
+                  type="submit"
+                  disabled={loading || !clientId.trim() || !email.trim()}
+                  className="rounded-xl bg-white/95 text-[#d9212b] font-bold px-12 py-3 text-base hover:bg-white transition disabled:opacity-60 disabled:cursor-not-allowed shadow"
+                >
+                  {loading ? 'Sending…' : 'Sign Up'}
+                </button>
+              </form>
+
+              <p className="text-white mt-6">
+                Already a member ?{' '}
+                <button
+                  type="button"
+                  onClick={() => switchView('signin')}
+                  className="text-white font-bold underline underline-offset-2"
+                >
+                  Sign In
+                </button>
+              </p>
+            </>
+          )}
+
+          {view === 'signup' && signupSent && (
+            <>
+              <h1 className="text-white font-extrabold text-3xl md:text-4xl leading-tight tracking-wide">
+                Verification email sent
+              </h1>
+              <p className="text-white text-base md:text-lg mt-4 max-w-md">
+                We&apos;ve sent a verification link to{' '}
+                <span className="font-bold">{email}</span>. The link is valid for 2 hours.
+              </p>
+              <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 max-w-md text-sm md:text-base">
+                <button
+                  type="button"
+                  onClick={() => setSignupSent(false)}
+                  className="text-white font-bold underline underline-offset-2"
+                >
+                  Change email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => submitSignup()}
+                  className="text-white font-bold underline underline-offset-2"
+                >
+                  Resend email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchView('signin')}
+                  className="text-white/90 hover:text-white"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        {step === 'identifier' && (
-          <form onSubmit={sendOtp} className="space-y-3">
-            <label className="block text-sm font-medium">Email or 10-digit mobile</label>
-            <input
-              autoFocus
-              className="input"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="you@company.com"
-            />
-            {error && <div className="text-sm text-red-600">{error}</div>}
-            <button type="submit" disabled={loading || !identifier.trim()} className="btn-primary w-full justify-center">
-              {loading ? 'Sending…' : 'Send OTP'}
-            </button>
-          </form>
-        )}
-
-        {step === 'otp' && (
-          <div className="space-y-3">
-            <p className="text-sm text-slate-600">
-              Enter the 4-digit OTP sent to <span className="font-medium">{identifier}</span>.
-            </p>
-            <div className="flex gap-2 justify-center">
-              {otp.map((d, i) => (
-                <input
-                  key={i}
-                  ref={(el) => { if (el) otpInputs.current[i] = el; }}
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={d}
-                  onChange={(e) => onOtpChange(i, e.target.value)}
-                  onPaste={onOtpPaste}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Backspace' && !otp[i] && i > 0) otpInputs.current[i - 1]?.focus();
-                  }}
-                  className="input w-12 text-center text-lg font-bold"
-                />
-              ))}
-            </div>
-            {error && <div className="text-sm text-red-600 text-center">{error}</div>}
-            <div className="flex justify-between text-sm">
-              <button onClick={() => { setStep('identifier'); setOtp(['', '', '', '']); }} className="text-slate-600 hover:underline">
-                Change number
-              </button>
-              <button onClick={() => sendOtp()} disabled={loading} className="text-primary hover:underline">
-                Resend OTP
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+        {/* Right column — phone mockup (hidden on mobile so form has room) */}
+        <div className="hidden md:flex items-center justify-center">
+          <Image
+            src="/mobileTrans.png"
+            alt="EasyFix mobile app preview"
+            width={420}
+            height={840}
+            priority
+            className="max-h-[72vh] w-auto drop-shadow-2xl"
+          />
+        </div>
+      </section>
     </main>
   );
 }
