@@ -132,9 +132,9 @@ export default function OrderHistoryPage() {
           <button type="button" className="btn-outline" title="Raise an escalation (coming soon)">
             <AlertTriangle className="w-4 h-4 text-primary" /> Escalate
           </button>
-          <button type="button" className="btn-outline" title="Bulk upload (coming soon)">
+          <Link href="/jobs/upload" className="btn-outline" title="Bulk-upload orders via .xlsx">
             <Upload className="w-4 h-4" /> Bulk Upload
-          </button>
+          </Link>
           <Link href="/export" className="btn-outline">
             <Download className="w-4 h-4" /> Export
           </Link>
