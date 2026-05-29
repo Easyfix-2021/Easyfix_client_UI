@@ -27,6 +27,7 @@ import {
   Menu,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 
 type NavItem = {
   href?: string;
@@ -88,10 +89,36 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
     })();
   }, [router]);
 
-  async function logout() {
-    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); }
-    catch { /* network failure is ok */ }
+  // ─── Logout flow ────────────────────────────────────────────────────
+  // Two-step: clicking the icon opens a confirmation dialog (legacy
+  // parity — LogoutDialogComponent on the Angular dashboard); confirming
+  // calls the API, wipes the token + any cached SPOC state, and
+  // redirects to the public landing page.
+  //
+  // The fetch can fail (offline / backend down) but we STILL clear local
+  // state and redirect — staying on the dashboard with no working
+  // session is a worse failure mode than the cookie surviving server-side
+  // (it'll expire on its own; tokens are stateless JWTs).
+  const [logoutOpen, setLogoutOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function performLogout() {
+    setLoggingOut(true);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* network failure is OK — token will expire stateless-style and
+         the local cleanup below still happens. */
+    }
+    // Wipe every local trace of the session so a refresh can't reuse
+    // the old token. setToken(null) clears localStorage.client_auth_token;
+    // we also blow away the in-memory SPOC context.
     setToken(null);
+    setSpoc(null);
+    // Any other client-side caches the app accumulates should be torn
+    // down here too. Currently only useFetchOnce holds path-keyed state,
+    // and that lives inside unmounted route components — `router.push('/')`
+    // unmounts them, so nothing to clear explicitly.
     router.push('/');
   }
 
@@ -205,7 +232,7 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
 
             <button
               type="button"
-              onClick={logout}
+              onClick={() => setLogoutOpen(true)}
               aria-label="Logout"
               title="Logout"
               className="p-2 rounded hover:bg-primary-50 text-slate-700 hover:text-primary transition"
@@ -217,6 +244,19 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
 
         <main className="flex-1 p-4 md:p-6 overflow-auto">{children}</main>
       </div>
+
+      <ConfirmDialog
+        open={logoutOpen}
+        onClose={() => setLogoutOpen(false)}
+        onConfirm={performLogout}
+        title="Sign out?"
+        message={`You'll be returned to the sign-in screen. ${spoc?.contact_name ? `See you soon, ${spoc.contact_name.split(' ')[0]}.` : ''}`}
+        confirmLabel="Sign out"
+        cancelLabel="Cancel"
+        tone="primary"
+        busy={loggingOut}
+        icon={LogOut}
+      />
     </div>
     </SpocContext.Provider>
   );

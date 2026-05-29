@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>EasyFix — Theme Preview</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:32px 24px}
+  h1{font-size:28px;font-weight:800;margin-bottom:6px}
+  .sub{color:#64748b;margin-bottom:32px}
+  .palette{margin-bottom:48px;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.06)}
+  .palette-header{padding:18px 24px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between}
+  .palette-header h2{font-size:18px;font-weight:700}
+  .palette-header .swatches{display:flex;gap:6px}
+  .swatch{width:22px;height:22px;border-radius:6px;border:1px solid rgba(0,0,0,.08)}
+  .mockup{display:grid;grid-template-columns:240px 1fr;height:520px}
+  .sidebar{padding:20px 14px;display:flex;flex-direction:column;gap:6px}
+  .logo{background:#fff;border-radius:12px;padding:10px;font-weight:800;color:#d9212b;text-align:center;font-size:18px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
+  .brand{font-size:11px;font-weight:600;letter-spacing:.08em;opacity:.85;margin-bottom:18px;padding:0 6px}
+  .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s}
+  .navitem .ic{width:16px;height:16px;border-radius:4px;opacity:.8}
+  .navitem.active{background:rgba(255,255,255,.95);color:#0f172a;font-weight:600}
+  .navitem.active .ic{background:#0f172a;opacity:.8}
+  .main{background:#f8fafc;padding:18px 26px;overflow:hidden}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #e2e8f0}
+  .bell{width:34px;height:34px;border-radius:50%;background:#fff;border:1px solid #e2e8f0;display:grid;place-items:center;font-size:14px;position:relative}
+  .bell::after{content:'';position:absolute;top:6px;right:8px;width:6px;height:6px;border-radius:50%;background:#ef4444}
+  .user{display:flex;align-items:center;gap:10px}
+  .avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;color:#fff;font-size:12px}
+  .uname{font-size:13px;font-weight:600;line-height:1.2}
+  .uname small{display:block;font-weight:400;color:#64748b;font-size:11px}
+  .page-title{font-size:22px;font-weight:800;margin-bottom:4px}
+  .page-sub{color:#64748b;font-size:13px;margin-bottom:16px}
+  .actions{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tabs{display:flex;gap:8px}
+  .tab{padding:9px 18px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid #e2e8f0;background:#fff;color:#475569}
+  .tab.active{color:#fff;border:none}
+  .btn{padding:9px 14px;border-radius:10px;font-size:13px;font-weight:600;border:1px solid #e2e8f0;background:#fff;color:#334155;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+  .btn-primary{color:#fff;border:none}
+  .row{display:flex;justify-content:space-between;align-items:center}
+  .table{background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;font-size:12px}
+  .th,.tr{display:grid;grid-template-columns:90px 90px 1fr 110px 90px 90px;gap:12px;padding:12px 16px;align-items:center}
+  .th{background:#f8fafc;font-weight:600;color:#64748b;border-bottom:1px solid #e2e8f0;font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+  .tr{border-bottom:1px solid #f1f5f9}
+  .tr:last-child{border-bottom:none}
+  .jid{font-weight:700}
+  .badge{padding:4px 10px;border-radius:999px;font-size:10px;font-weight:700;display:inline-block;text-align:center}
+
+  /* ───── PALETTE 1: Corporate Navy & Teal ───── */
+  .p1 .sidebar{background:#0F2C4D;color:#cbd5e1}
+  .p1 .btn-primary,.p1 .tab.active{background:#0E9F8E}
+  .p1 .jid{color:#0E9F8E}
+  .p1 .avatar{background:#0E9F8E}
+  .p1 .b-unconf{background:#FEF3C7;color:#92400E}
+  .p1 .b-prog{background:#DBEAFE;color:#1E40AF}
+  .p1 .b-cancel{background:#FEE2E2;color:#991B1B}
+
+  /* ───── PALETTE 2: Modern Indigo ───── */
+  .p2 .sidebar{background:#1E1B4B;color:#cbd5e1}
+  .p2 .btn-primary,.p2 .tab.active{background:#6366F1}
+  .p2 .jid{color:#6366F1}
+  .p2 .avatar{background:#6366F1}
+  .p2 .b-unconf{background:#FEF3C7;color:#92400E}
+  .p2 .b-prog{background:#EDE9FE;color:#5B21B6}
+  .p2 .b-cancel{background:#FEE2E2;color:#991B1B}
+
+  /* ───── PALETTE 3: Emerald & Slate ───── */
+  .p3 .sidebar{background:#0F172A;color:#cbd5e1}
+  .p3 .btn-primary,.p3 .tab.active{background:#10B981}
+  .p3 .jid{color:#10B981}
+  .p3 .avatar{background:#10B981}
+  .p3 .b-unconf{background:#FEF3C7;color:#92400E}
+  .p3 .b-prog{background:#DBEAFE;color:#1E40AF}
+  .p3 .b-cancel{background:#FEE2E2;color:#991B1B}
+
+  /* ───── PALETTE 4: Midnight Dark ───── */
+  .p4 .sidebar{background:#09090B;color:#a1a1aa}
+  .p4 .main{background:#18181B;color:#fafafa}
+  .p4 .topbar{border-color:#27272a}
+  .p4 .page-sub,.p4 .uname small{color:#a1a1aa}
+  .p4 .bell{background:#27272A;border-color:#3f3f46;color:#fafafa}
+  .p4 .btn{background:#27272A;border-color:#3f3f46;color:#fafafa}
+  .p4 .tab{background:#27272A;border-color:#3f3f46;color:#a1a1aa}
+  .p4 .btn-primary,.p4 .tab.active{background:#FB7185;color:#fff;border:none}
+  .p4 .jid{color:#FB7185}
+  .p4 .avatar{background:#FB7185}
+  .p4 .table{background:#27272A;border-color:#3f3f46}
+  .p4 .th{background:#18181B;color:#a1a1aa;border-color:#3f3f46}
+  .p4 .tr{border-color:#3f3f46}
+  .p4 .b-unconf{background:rgba(251,191,36,.2);color:#FCD34D}
+  .p4 .b-prog{background:rgba(96,165,250,.2);color:#93C5FD}
+  .p4 .b-cancel{background:rgba(248,113,113,.2);color:#FCA5A5}
+
+  /* ───── PALETTE 5: Warm Sunset ───── */
+  .p5 .sidebar{background:#7C2D12;color:#fed7aa}
+  .p5 .main{background:#FFFBEB}
+  .p5 .btn-primary,.p5 .tab.active{background:#F97316}
+  .p5 .jid{color:#EA580C}
+  .p5 .avatar{background:#F97316}
+  .p5 .b-unconf{background:#FEF3C7;color:#92400E}
+  .p5 .b-prog{background:#DBEAFE;color:#1E40AF}
+  .p5 .b-cancel{background:#FEE2E2;color:#991B1B}
+
+  /* ───── PALETTE 6: Glass Purple ───── */
+  .p6 .sidebar{background:linear-gradient(180deg,#7C3AED 0%,#4C1D95 100%);color:#e9d5ff}
+  .p6 .main{background:#FAF5FF}
+  .p6 .btn-primary,.p6 .tab.active{background:#8B5CF6}
+  .p6 .jid{color:#7C3AED}
+  .p6 .avatar{background:linear-gradient(135deg,#8B5CF6,#EC4899)}
+  .p6 .b-unconf{background:#FEF3C7;color:#92400E}
+  .p6 .b-prog{background:#EDE9FE;color:#5B21B6}
+  .p6 .b-cancel{background:#FCE7F3;color:#9F1239}
+
+  /* ───── PALETTE 0: Current Red (baseline) ───── */
+  .p0 .sidebar{background:#d9212b;color:#fee2e2}
+  .p0 .btn-primary,.p0 .tab.active{background:#d9212b}
+  .p0 .jid{color:#d9212b}
+  .p0 .avatar{background:#d9212b}
+  .p0 .b-unconf{background:#FEF3C7;color:#92400E}
+  .p0 .b-prog{background:#EDE9FE;color:#5B21B6}
+  .p0 .b-cancel{background:#FEE2E2;color:#991B1B}
+</style>
+</head>
+<body>
+
+<h1>EasyFix — Theme Preview</h1>
+<p class="sub">Scroll through 7 palettes. Tell me which number to apply.</p>
+
+<!-- Template repeated 7 times. Only the .pN class on .mockup changes. -->
+<!-- ═══════════════════ PALETTE 0: CURRENT ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header">
+    <h2>0 · Current — Brand Red</h2>
+    <div class="swatches">
+      <div class="swatch" style="background:#d9212b"></div>
+      <div class="swatch" style="background:#fee2e2"></div>
+      <div class="swatch" style="background:#f8fafc"></div>
+    </div>
+  </div>
+  <div class="mockup p0">
+    <aside class="sidebar">
+      <div class="logo">EASYFix</div>
+      <div class="brand">SERVICE DASHBOARD<br/>Client #10</div>
+      <div class="navitem active"><div class="ic"></div>History</div>
+      <div class="navitem"><div class="ic"></div>New Tickets</div>
+      <div class="navitem"><div class="ic"></div>Client Delay</div>
+      <div class="navitem"><div class="ic"></div>Committed Appts</div>
+      <div class="navitem"><div class="ic"></div>Tx on Location</div>
+      <div class="navitem"><div class="ic"></div>My Team</div>
+      <div class="navitem"><div class="ic"></div>My Technicians</div>
+    </aside>
+    <div class="main">
+      <div class="topbar">
+        <div></div>
+        <div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div>
+      </div>
+      <div class="row" style="align-items:flex-start">
+        <div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div>
+        <div class="actions">
+          <button class="btn">⚠ Escalate</button>
+          <button class="btn">⬆ Bulk Upload</button>
+          <button class="btn">⬇ Export</button>
+          <button class="btn btn-primary">+ New Orders</button>
+        </div>
+      </div>
+      <div class="tabs" style="margin:14px 0 16px">
+        <div class="tab active">All Orders</div>
+        <div class="tab">Completed &amp; Under Audit</div>
+      </div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PALETTE 1: NAVY & TEAL ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header">
+    <h2>1 · Corporate Navy &amp; Teal</h2>
+    <div class="swatches">
+      <div class="swatch" style="background:#0F2C4D"></div>
+      <div class="swatch" style="background:#0E9F8E"></div>
+      <div class="swatch" style="background:#3B82F6"></div>
+    </div>
+  </div>
+  <div class="mockup p1">
+    <aside class="sidebar">
+      <div class="logo">EASYFix</div>
+      <div class="brand">SERVICE DASHBOARD<br/>Client #10</div>
+      <div class="navitem active"><div class="ic"></div>History</div>
+      <div class="navitem"><div class="ic"></div>New Tickets</div>
+      <div class="navitem"><div class="ic"></div>Client Delay</div>
+      <div class="navitem"><div class="ic"></div>Committed Appts</div>
+      <div class="navitem"><div class="ic"></div>Tx on Location</div>
+      <div class="navitem"><div class="ic"></div>My Team</div>
+      <div class="navitem"><div class="ic"></div>My Technicians</div>
+    </aside>
+    <div class="main">
+      <div class="topbar"><div></div><div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div></div>
+      <div class="row" style="align-items:flex-start">
+        <div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div>
+        <div class="actions"><button class="btn">⚠ Escalate</button><button class="btn">⬆ Bulk Upload</button><button class="btn">⬇ Export</button><button class="btn btn-primary">+ New Orders</button></div>
+      </div>
+      <div class="tabs" style="margin:14px 0 16px"><div class="tab active">All Orders</div><div class="tab">Completed &amp; Under Audit</div></div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PALETTE 2: INDIGO ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header"><h2>2 · Modern Indigo</h2><div class="swatches"><div class="swatch" style="background:#1E1B4B"></div><div class="swatch" style="background:#6366F1"></div><div class="swatch" style="background:#A78BFA"></div></div></div>
+  <div class="mockup p2">
+    <aside class="sidebar">
+      <div class="logo">EASYFix</div><div class="brand">SERVICE DASHBOARD<br/>Client #10</div>
+      <div class="navitem active"><div class="ic"></div>History</div><div class="navitem"><div class="ic"></div>New Tickets</div><div class="navitem"><div class="ic"></div>Client Delay</div><div class="navitem"><div class="ic"></div>Committed Appts</div><div class="navitem"><div class="ic"></div>Tx on Location</div><div class="navitem"><div class="ic"></div>My Team</div><div class="navitem"><div class="ic"></div>My Technicians</div>
+    </aside>
+    <div class="main">
+      <div class="topbar"><div></div><div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div></div>
+      <div class="row" style="align-items:flex-start"><div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div><div class="actions"><button class="btn">⚠ Escalate</button><button class="btn">⬆ Bulk Upload</button><button class="btn">⬇ Export</button><button class="btn btn-primary">+ New Orders</button></div></div>
+      <div class="tabs" style="margin:14px 0 16px"><div class="tab active">All Orders</div><div class="tab">Completed &amp; Under Audit</div></div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PALETTE 3: EMERALD ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header"><h2>3 · Emerald &amp; Slate</h2><div class="swatches"><div class="swatch" style="background:#0F172A"></div><div class="swatch" style="background:#10B981"></div><div class="swatch" style="background:#34D399"></div></div></div>
+  <div class="mockup p3">
+    <aside class="sidebar"><div class="logo">EASYFix</div><div class="brand">SERVICE DASHBOARD<br/>Client #10</div><div class="navitem active"><div class="ic"></div>History</div><div class="navitem"><div class="ic"></div>New Tickets</div><div class="navitem"><div class="ic"></div>Client Delay</div><div class="navitem"><div class="ic"></div>Committed Appts</div><div class="navitem"><div class="ic"></div>Tx on Location</div><div class="navitem"><div class="ic"></div>My Team</div><div class="navitem"><div class="ic"></div>My Technicians</div></aside>
+    <div class="main">
+      <div class="topbar"><div></div><div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div></div>
+      <div class="row" style="align-items:flex-start"><div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div><div class="actions"><button class="btn">⚠ Escalate</button><button class="btn">⬆ Bulk Upload</button><button class="btn">⬇ Export</button><button class="btn btn-primary">+ New Orders</button></div></div>
+      <div class="tabs" style="margin:14px 0 16px"><div class="tab active">All Orders</div><div class="tab">Completed &amp; Under Audit</div></div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PALETTE 4: MIDNIGHT DARK ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header"><h2>4 · Midnight Dark</h2><div class="swatches"><div class="swatch" style="background:#09090B"></div><div class="swatch" style="background:#FB7185"></div><div class="swatch" style="background:#27272A"></div></div></div>
+  <div class="mockup p4">
+    <aside class="sidebar"><div class="logo">EASYFix</div><div class="brand">SERVICE DASHBOARD<br/>Client #10</div><div class="navitem active"><div class="ic"></div>History</div><div class="navitem"><div class="ic"></div>New Tickets</div><div class="navitem"><div class="ic"></div>Client Delay</div><div class="navitem"><div class="ic"></div>Committed Appts</div><div class="navitem"><div class="ic"></div>Tx on Location</div><div class="navitem"><div class="ic"></div>My Team</div><div class="navitem"><div class="ic"></div>My Technicians</div></aside>
+    <div class="main">
+      <div class="topbar"><div></div><div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div></div>
+      <div class="row" style="align-items:flex-start"><div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div><div class="actions"><button class="btn">⚠ Escalate</button><button class="btn">⬆ Bulk Upload</button><button class="btn">⬇ Export</button><button class="btn btn-primary">+ New Orders</button></div></div>
+      <div class="tabs" style="margin:14px 0 16px"><div class="tab active">All Orders</div><div class="tab">Completed &amp; Under Audit</div></div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PALETTE 5: WARM SUNSET ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header"><h2>5 · Warm Sunset</h2><div class="swatches"><div class="swatch" style="background:#7C2D12"></div><div class="swatch" style="background:#F97316"></div><div class="swatch" style="background:#FFFBEB"></div></div></div>
+  <div class="mockup p5">
+    <aside class="sidebar"><div class="logo">EASYFix</div><div class="brand">SERVICE DASHBOARD<br/>Client #10</div><div class="navitem active"><div class="ic"></div>History</div><div class="navitem"><div class="ic"></div>New Tickets</div><div class="navitem"><div class="ic"></div>Client Delay</div><div class="navitem"><div class="ic"></div>Committed Appts</div><div class="navitem"><div class="ic"></div>Tx on Location</div><div class="navitem"><div class="ic"></div>My Team</div><div class="navitem"><div class="ic"></div>My Technicians</div></aside>
+    <div class="main">
+      <div class="topbar"><div></div><div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div></div>
+      <div class="row" style="align-items:flex-start"><div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div><div class="actions"><button class="btn">⚠ Escalate</button><button class="btn">⬆ Bulk Upload</button><button class="btn">⬇ Export</button><button class="btn btn-primary">+ New Orders</button></div></div>
+      <div class="tabs" style="margin:14px 0 16px"><div class="tab active">All Orders</div><div class="tab">Completed &amp; Under Audit</div></div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ PALETTE 6: GLASS PURPLE ═══════════════════ -->
+<section class="palette">
+  <div class="palette-header"><h2>6 · Glass Purple</h2><div class="swatches"><div class="swatch" style="background:#7C3AED"></div><div class="swatch" style="background:#8B5CF6"></div><div class="swatch" style="background:#EC4899"></div></div></div>
+  <div class="mockup p6">
+    <aside class="sidebar"><div class="logo">EASYFix</div><div class="brand">SERVICE DASHBOARD<br/>Client #10</div><div class="navitem active"><div class="ic"></div>History</div><div class="navitem"><div class="ic"></div>New Tickets</div><div class="navitem"><div class="ic"></div>Client Delay</div><div class="navitem"><div class="ic"></div>Committed Appts</div><div class="navitem"><div class="ic"></div>Tx on Location</div><div class="navitem"><div class="ic"></div>My Team</div><div class="navitem"><div class="ic"></div>My Technicians</div></aside>
+    <div class="main">
+      <div class="topbar"><div></div><div class="user"><div class="bell">🔔</div><div class="avatar">HK</div><div class="uname">Harkirpa Kaur<small>Client #10</small></div></div></div>
+      <div class="row" style="align-items:flex-start"><div><div class="page-title">My Order History</div><div class="page-sub">Track, manage, and review the orders raised.</div></div><div class="actions"><button class="btn">⚠ Escalate</button><button class="btn">⬆ Bulk Upload</button><button class="btn">⬇ Export</button><button class="btn btn-primary">+ New Orders</button></div></div>
+      <div class="tabs" style="margin:14px 0 16px"><div class="tab active">All Orders</div><div class="tab">Completed &amp; Under Audit</div></div>
+      <div class="table">
+        <div class="th"><div>Job ID</div><div>Ref ID</div><div>Client Ref ID</div><div>Customer</div><div>Status</div><div>Source</div></div>
+        <div class="tr"><div class="jid">#482446</div><div>—</div><div>123</div><div>Harshit</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482437</div><div>—</div><div>ByHarshit</div><div>Anshuman</div><div><span class="badge b-unconf">Unconfirmed</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482434</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-prog">In-Progress</span></div><div>manual</div></div>
+        <div class="tr"><div class="jid">#482433</div><div>—</div><div>123</div><div>Harkirpa</div><div><span class="badge b-cancel">Cancelled</span></div><div>manual</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
