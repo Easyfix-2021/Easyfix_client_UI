@@ -3,39 +3,41 @@
 /*
  * My Order History — primary landing page after SPOC login.
  *
- * Replicates the legacy Angular_ClientDashboard dual-tab pattern:
- *  - "All Orders"           → no status filter
- *  - "Completed & Under Audit" → status=3 (Completed) + status=5 (Completed alt)
+ * Migrated from legacy ACD_APIs
+ *   POST /api/clients/{clientId}/jobs?pageNo=1&pageSize=5&sortBy=job_id
+ *   body: { flag, status[], clientSpocId, cityIds, userIds, startDate,
+ *           endDate, ageBracket }
+ * (Angular OrderHistoryComponent — order-history.component.ts + .html).
  *
- * Filter bar (parity with the Angular job-status-filter component):
- *  - Search (Job ID / Ref ID / customer / mobile)  — debounced 300ms
- *  - Ticket Created Date range  (startDate / endDate, dateType=created)
- *  - City multi-select          (cityIds, scoped to client's job cities)
- *  - Client Team multi-select   (ownerIds, from /team/members)
- *  - Bucket multi-select        (statuses CSV — only on the "All Orders" tab,
- *                                hidden on Completed to match legacy)
- *  - Apply / Reset buttons      — Apply commits the staged filter to the
- *                                fetch URL; Reset clears everything.
+ * Tabs (legacy parity — `flag` field):
+ *   1. All Orders                → flag=otherOrders
+ *      Whole-client view, NOT auto-scoped to SPOC's team
+ *   2. Completed & Under Audit   → flag=completedOrders
+ *      Auto-scoped to SPOC's team (matches legacy)
+ *      Backend adds ready_for_billing='Yes' AND sub_job_id IS NULL
  *
- * Search + page-size are LIVE (no Apply needed). The heavier filters are
- * staged so the user can compose a query without firing a request per
- * checkbox toggle. Matches the legacy UX.
+ * Both tabs send the legacy status list [0,1,2,3,5,6,7,9,10,15,20,21,22]
+ * so the network payload mirrors the legacy POST body 1:1.
+ *
+ * Table columns are the EXACT set from legacy job-status.model.ts
+ * (OrderHistoryTable for All Orders, VisitDoneTable for Completed).
  */
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Plus, Upload, Download, AlertTriangle, Search,
-  ChevronLeft, ChevronRight, Star, Filter, X,
+  ChevronLeft, ChevronRight, Star, Filter, X, RotateCcw,
 } from 'lucide-react';
 import { useFetch, useFetchOnce, useDebouncedValue } from '@/lib/hooks';
 import { ApiError, downloadBlob } from '@/lib/api';
+import { useSpoc } from '@/lib/spoc-context';
 import { STATUS_LABELS } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { MultiSelect, type MultiSelectOption } from '@/components/multi-select';
 
 type Job = {
   job_id: number;
-  job_reference_id: string | null;
+  job_reference_id: string | null;     // "Ref ID" column (legacy referenceId)
   client_ref_id: string | null;
   job_status: number;
   customer_name: string | null;
@@ -43,26 +45,44 @@ type Job = {
   city_name: string | null;
   requested_date_time: string | null;
   scheduled_date_time: string | null;
+  checkin_date_time: string | null;    // "App Start" on Completed tab
+  checkout_date_time: string | null;
+  ticket_created_date_time: string | null;
+  created_date_time: string | null;
+  original_appointment_date_time: string | null;  // for OTA computation
+  time_slot: string | null;            // shown under Appointment on Completed
   easyfixer_name: string | null;
-  source_type?: string | null;
-  bucket_status?: string | null;
+  source_type: string | null;
   rating?: number | null;
   is_escalated?: boolean | number | null;
+  ready_for_billing?: string | null;   // 'Yes' / 'No'
+  sub_job_id?: number | null;
+  job_reopen_flag?: number | null;     // 1 → "Reopened", 0 → "Reopen"
 };
 
-type TabKey = 'all' | 'completed';
-const TABS: Array<{ key: TabKey; label: string; statuses: number[] | null }> = [
-  { key: 'all',       label: 'All Orders',                statuses: null },
-  { key: 'completed', label: 'Completed & Under Audit',   statuses: [3, 5] },
+// Tab keys mirror legacy flag values exactly.
+type TabKey = 'otherOrders' | 'completedOrders';
+const TABS: Array<{ key: TabKey; label: string; subtitle: string }> = [
+  {
+    key: 'otherOrders',
+    label: 'All Orders',
+    subtitle: 'Below tickets the order appointment to be confirmed.',
+  },
+  {
+    key: 'completedOrders',
+    label: 'In-Warranty Orders',
+    subtitle: 'Below orders need repair and are completed on D+2 days of approval.',
+  },
 ];
+
+// Full status set sent in the URL on both tabs — matches the legacy
+// POST body exactly. Backend can still filter further via the active
+// flag (completedOrders adds ready_for_billing predicates).
+const LEGACY_STATUS_SET = [0, 1, 2, 3, 5, 6, 7, 9, 10, 15, 20, 21, 22];
 
 const PAGE_SIZE_OPTIONS = [5, 10, 15, 20];
 
-// Bucket options shown on the "All Orders" tab. Each entry's `value`
-// is the CSV of backend status codes — picking "Completed" sends
-// statuses=3,5; picking multiple buckets concatenates their codes.
-// Mirrors the legacy Angular Buckets list, trimmed to codes the Next.js
-// STATUS_LABELS map already exposes.
+// Bucket options for the "All Orders" tab filter pickers.
 const BUCKET_OPTIONS: MultiSelectOption<string>[] = [
   { value: '0',    label: 'Unconfirmed' },
   { value: '1',    label: 'Scheduled' },
@@ -100,7 +120,7 @@ function ageInDays(iso: string | null): number | null {
   return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000));
 }
 
-function formatAppt(iso: string | null) {
+function formatDate(iso: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
@@ -109,16 +129,32 @@ function formatAppt(iso: string | null) {
   return `${day}, ${date}`;
 }
 
+// Legacy "OTA" — Same-day attempt: was the original appointment date
+// the same as the actual checkout? Yes if all three present and equal.
+function computeOTA(job: Job): string {
+  if (!job.original_appointment_date_time || !job.checkout_date_time) return '—';
+  const orig = new Date(job.original_appointment_date_time).toDateString();
+  const out  = new Date(job.checkout_date_time).toDateString();
+  return orig === out ? 'Yes' : 'No';
+}
+
+// Legacy "TAT" — turnaround days from ticket creation to checkout.
+function computeTAT(job: Job): string {
+  if (!job.ticket_created_date_time || !job.checkout_date_time) return '—';
+  const start = new Date(job.ticket_created_date_time).getTime();
+  const end   = new Date(job.checkout_date_time).getTime();
+  if (isNaN(start) || isNaN(end)) return '—';
+  const days = Math.max(0, Math.floor((end - start) / 86_400_000));
+  return `${days} Days`;
+}
+
 // ─── Filter state ────────────────────────────────────────────────────
-// Staged = what the user is composing in the filter bar.
-// Applied = what's been committed to the fetch URL via Apply.
-// Reset clears both.
 type FilterState = {
-  startDate: string;          // 'YYYY-MM-DD' or ''
+  startDate: string;
   endDate: string;
   cityIds: number[];
   ownerIds: number[];
-  bucketValues: string[];     // CSV chunks from BUCKET_OPTIONS, e.g. ['0','3,5']
+  bucketValues: string[];
 };
 
 const EMPTY_FILTERS: FilterState = {
@@ -131,9 +167,6 @@ function filtersDiffer(a: FilterState, b: FilterState) {
   if (a.cityIds.length !== b.cityIds.length) return true;
   if (a.ownerIds.length !== b.ownerIds.length) return true;
   if (a.bucketValues.length !== b.bucketValues.length) return true;
-  // Order doesn't matter for these arrays but we keep them stable; a
-  // shallow positional check is good enough since the only mutations
-  // come through MultiSelect's append/remove logic.
   if (a.cityIds.some((id, i) => id !== b.cityIds[i])) return true;
   if (a.ownerIds.some((id, i) => id !== b.ownerIds[i])) return true;
   if (a.bucketValues.some((v, i) => v !== b.bucketValues[i])) return true;
@@ -141,7 +174,8 @@ function filtersDiffer(a: FilterState, b: FilterState) {
 }
 
 export default function OrderHistoryPage() {
-  const [tab, setTab] = useState<TabKey>('all');
+  const spoc = useSpoc();
+  const [tab, setTab] = useState<TabKey>('otherOrders');
   const [q, setQ] = useState('');
   const debouncedQ = useDebouncedValue(q, 300);
   const [page, setPage] = useState(1);
@@ -150,22 +184,18 @@ export default function OrderHistoryPage() {
   const [staged, setStaged] = useState<FilterState>(EMPTY_FILTERS);
   const [applied, setApplied] = useState<FilterState>(EMPTY_FILTERS);
 
-  // Reset page-1 whenever any committed filter or search changes.
   useEffect(() => { setPage(1); }, [tab, debouncedQ, pageSize, applied]);
 
-  // When switching to "Completed" tab, the Bucket dropdown is hidden
-  // (legacy parity). Clear any staged bucket selections to avoid them
-  // sneaking back when the user swings back to "All Orders".
+  // On Completed tab, the bucket multi-select is hidden — clear any
+  // staged values so they don't sneak back when user returns to All.
   useEffect(() => {
-    if (tab === 'completed' && staged.bucketValues.length > 0) {
+    if (tab === 'completedOrders' && staged.bucketValues.length > 0) {
       setStaged((s) => ({ ...s, bucketValues: [] }));
     }
   }, [tab, staged.bucketValues.length]);
 
   const currentTab = useMemo(() => TABS.find((t) => t.key === tab) ?? TABS[0], [tab]);
 
-  // Lookups for City / Client Team dropdowns. useFetchOnce is fine —
-  // these are bootstrap loads, not reactive on user input.
   const cityLookup = useFetchOnce<{ items: { id: number; name: string }[] }>('/lookup/cities');
   const teamLookup = useFetchOnce<{ items: { id: number; name: string }[] }>('/team/members');
 
@@ -178,31 +208,64 @@ export default function OrderHistoryPage() {
     [teamLookup.data]
   );
 
-  // Compose the fetch URL from `applied` (committed) filters + the
-  // tab's status set. Buckets and tab statuses combine: Completed tab
-  // ALWAYS sends 3,5; All Orders tab sends whatever buckets the user
-  // picked (or omits the param entirely).
+  // Build the URL with EVERY legacy field for 1:1 network-tab parity.
+  //
+  // Legacy POST body had:
+  //   { flag, status[], clientSpocId, startDate, endDate, ageBracket,
+  //     cityIds, userIds }
+  // We translate to query params (GET is cacheable, no preflight).
+  // `clientSpocId` is sent but the backend ignores it and uses
+  // req.spoc.id from the JWT for security.
   const fetchPath = useMemo(() => {
     const params = new URLSearchParams();
-
-    if (currentTab.statuses) {
-      params.set('statuses', currentTab.statuses.join(','));
-    } else if (applied.bucketValues.length > 0) {
-      // Flatten ['0','3,5'] → '0,3,5'
-      const flat = applied.bucketValues.flatMap((v) => v.split(',')).join(',');
-      if (flat) params.set('statuses', flat);
+    // Strict legacy parity — send only `flag`, not `ticketFlag`. The
+    // backend reads either, with `flag` falling back through the same
+    // ticketFlag branch. Removing `ticketFlag` keeps the URL identical
+    // to the legacy POST body's `flag` field.
+    params.set('flag',         tab);
+    params.set('clientSpocId', String(spoc.id));               // legacy parity (server ignores)
+    // If user picked specific buckets, narrow the status list to those.
+    // Otherwise send the full legacy default set so the payload still
+    // matches the legacy network call when nothing's picked.
+    if (applied.bucketValues.length > 0) {
+      const flat = applied.bucketValues.flatMap((v) => v.split(',')).filter(Boolean).join(',');
+      params.set('statuses', flat);
+    } else {
+      params.set('statuses', LEGACY_STATUS_SET.join(','));
     }
-
-    if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
-    if (applied.startDate) params.set('startDate', applied.startDate);
-    if (applied.endDate)   params.set('endDate',   applied.endDate);
-    if (applied.cityIds.length)  params.set('cityIds',  applied.cityIds.join(','));
-    if (applied.ownerIds.length) params.set('ownerIds', applied.ownerIds.join(','));
+    if (debouncedQ.trim())        params.set('q', debouncedQ.trim());
+    if (applied.startDate)        params.set('startDate', applied.startDate);
+    if (applied.endDate)          params.set('endDate',   applied.endDate);
+    if (applied.cityIds.length)   params.set('cityIds',   applied.cityIds.join(','));
+    if (applied.ownerIds.length)  params.set('ownerIds',  applied.ownerIds.join(','));
     params.set('dateType', 'created');
     params.set('limit',  String(pageSize));
     params.set('offset', String((page - 1) * pageSize));
-    return `/jobs?${params}`;
-  }, [currentTab, applied, debouncedQ, pageSize, page]);
+    // URLSearchParams.toString() percent-encodes commas as %2C, which
+    // is technically correct but noisy in the DevTools network tab.
+    // The backend handles both encodings — we strip the encoding
+    // back to plain commas for legibility.
+    return `/jobs?${params.toString().replace(/%2C/g, ',')}`;
+  }, [tab, applied, debouncedQ, pageSize, page, spoc.id]);
+
+  // ─── Tab counts ──────────────────────────────────────────────────────
+  // Legacy parity: order-history.component.ts subscribes to
+  // bucketCountState$ for otherOrdersCount + completedForBillingOrdersCount.
+  // We hit a dedicated endpoint that returns both in one round-trip and
+  // refetches when the applied filters change.
+  const countsPath = useMemo(() => {
+    const p = new URLSearchParams();
+    p.set('clientSpocId', String(spoc.id));
+    if (debouncedQ.trim())        p.set('q', debouncedQ.trim());
+    if (applied.startDate)        p.set('startDate', applied.startDate);
+    if (applied.endDate)          p.set('endDate',   applied.endDate);
+    if (applied.cityIds.length)   p.set('cityIds',   applied.cityIds.join(','));
+    if (applied.ownerIds.length)  p.set('ownerIds',  applied.ownerIds.join(','));
+    return `/orders/counts?${p.toString().replace(/%2C/g, ',')}`;
+  }, [applied, debouncedQ, spoc.id]);
+
+  const countsRes = useFetch<{ otherOrders: number; completedOrders: number }>(countsPath);
+  const counts = countsRes.data ?? { otherOrders: 0, completedOrders: 0 };
 
   const { data, error, loading } = useFetch<{ items: Job[]; total: number }>(fetchPath);
 
@@ -226,60 +289,53 @@ export default function OrderHistoryPage() {
   }
 
   // ─── Export to Excel ────────────────────────────────────────────────
-  // Migrated from legacy ACD_APIs `POST /api/jobs/exportToExcel/{clientId}`.
-  // The new endpoint accepts the same filter set as the list call, so we
-  // simply reuse the applied filters + tab + search and download.
+  // Mandatory date-range guard preserved from legacy
+  // job-status-header.component.ts:122-143.
   //
-  // Legacy guards (job-status-header.component.ts:122-143) preserved:
-  //   1. Both startDate AND endDate must be set in the APPLIED filter
-  //      (staged-but-not-applied doesn't count — would mismatch the
-  //      spreadsheet contents).
-  //   2. Range must be ≤ 60 days. Larger windows used to OOM the legacy
-  //      POI workbook; the new xlsx lib handles it fine but the cap is
-  //      a sensible product guardrail anyway.
+  // Export reads from STAGED filters (live UI state), NOT applied — so
+  // the user can pick date + city + bucket and immediately download
+  // without first clicking Apply Filter to reload the table. The only
+  // hard gate is the date range (both From + To) and the ≤ 60-day cap.
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-
-  // Pre-computed enable state — drives the button's disabled prop AND
-  // its tooltip so the user knows WHY it's disabled before clicking.
   const exportGate = useMemo(() => {
-    if (!applied.startDate || !applied.endDate) {
-      return { ok: false, reason: 'Pick a date range (both From and To) and click Apply Filter to enable export.' };
+    if (!staged.startDate || !staged.endDate) {
+      return { ok: false, reason: 'Pick a date range (both From and To) to enable export.' };
     }
-    const ms = new Date(applied.endDate).getTime() - new Date(applied.startDate).getTime();
+    const ms = new Date(staged.endDate).getTime() - new Date(staged.startDate).getTime();
     const days = Math.floor(ms / 86_400_000);
     if (days > 60) {
-      return { ok: false, reason: `Date range is ${days} days. Maximum allowed is 60 days — narrow the range and Apply again.` };
+      return { ok: false, reason: `Date range is ${days} days. Maximum allowed is 60 days — narrow the range to export.` };
     }
     return { ok: true, reason: '' };
-  }, [applied.startDate, applied.endDate]);
+  }, [staged.startDate, staged.endDate]);
 
   async function handleExport() {
-    // Belt-and-braces — the button is disabled when !exportGate.ok, but
-    // re-checking inside the handler protects against form-submit /
-    // keyboard-Enter paths and surfaces the same message inline.
-    if (!exportGate.ok) {
-      setExportError(exportGate.reason);
-      return;
-    }
-    setExporting(true);
-    setExportError(null);
+    if (!exportGate.ok) { setExportError(exportGate.reason); return; }
+    setExporting(true); setExportError(null);
     try {
       const params = new URLSearchParams();
-      if (currentTab.statuses) {
-        params.set('statuses', currentTab.statuses.join(','));
-      } else if (applied.bucketValues.length > 0) {
-        const flat = applied.bucketValues.flatMap((v) => v.split(',')).join(',');
-        if (flat) params.set('statuses', flat);
+      params.set('flag',       tab);
+      params.set('clientSpocId', String(spoc.id));
+      // All filter values pulled from `staged` (what's currently in the
+      // UI), not `applied`. Lets the user tweak inputs and export
+      // without round-tripping through Apply Filter.
+      if (staged.bucketValues.length > 0) {
+        const flat = staged.bucketValues.flatMap((v) => v.split(',')).filter(Boolean).join(',');
+        params.set('statuses', flat);
+      } else {
+        params.set('statuses', LEGACY_STATUS_SET.join(','));
       }
       if (debouncedQ.trim())        params.set('q', debouncedQ.trim());
-      params.set('startDate', applied.startDate);
-      params.set('endDate',   applied.endDate);
-      if (applied.cityIds.length)   params.set('cityIds',   applied.cityIds.join(','));
-      if (applied.ownerIds.length)  params.set('ownerIds',  applied.ownerIds.join(','));
+      params.set('startDate', staged.startDate);
+      params.set('endDate',   staged.endDate);
+      if (staged.cityIds.length)    params.set('cityIds',   staged.cityIds.join(','));
+      if (staged.ownerIds.length)   params.set('ownerIds',  staged.ownerIds.join(','));
       params.set('dateType', 'created');
       const ts = new Date().toISOString().slice(0, 10);
-      await downloadBlob(`/export/jobs?${params}`, `OrderHistory_${ts}.xlsx`);
+      // Same %2C → "," cleanup as the list fetch — purely cosmetic.
+      const qs = params.toString().replace(/%2C/g, ',');
+      await downloadBlob(`/export/jobs?${qs}`, `OrderHistory_${ts}.xlsx`);
     } catch (err) {
       setExportError(err instanceof ApiError ? err.message : 'Export failed');
     } finally {
@@ -287,19 +343,31 @@ export default function OrderHistoryPage() {
     }
   }
 
+  // Column counts — used for "loading…" colspans.
+  const otherColCount = 10;       // All Orders tab
+  const completedColCount = 10;   // Completed tab
+  const colCount = tab === 'otherOrders' ? otherColCount : completedColCount;
+
   return (
     <div className="space-y-5">
       {/* Title + action buttons */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">My Order History</h1>
-          <p className="text-sm text-slate-500">Track, manage, and review the orders raised for your account.</p>
+          <p className="text-sm text-slate-500">{currentTab.subtitle}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn-outline" title="Raise an escalation (coming soon)">
+          {/* Legacy parity: job-status-header.component "Escalate" button —
+              navigates to the Escalated Orders list. Maps to legacy
+              openEscalated() → router.navigate(['/escalated/escalated']). */}
+          <Link
+            href="/tickets/escalated"
+            className="btn-outline"
+            title="View escalated orders"
+          >
             <AlertTriangle className="w-4 h-4 text-primary" /> Escalate
-          </button>
+          </Link>
           <Link href="/jobs/upload" className="btn-outline" title="Bulk-upload orders via .xlsx">
             <Upload className="w-4 h-4" /> Bulk Upload
           </Link>
@@ -309,7 +377,7 @@ export default function OrderHistoryPage() {
             disabled={exporting || !exportGate.ok}
             className="btn-outline disabled:cursor-not-allowed disabled:opacity-60"
             title={exportGate.ok
-              ? 'Download the current filtered view as Excel (max 60-day range)'
+              ? 'Download Excel using the current filter inputs (date range mandatory, max 60 days)'
               : exportGate.reason}
           >
             <Download className="w-4 h-4" /> {exporting ? 'Exporting…' : 'Export'}
@@ -320,25 +388,33 @@ export default function OrderHistoryPage() {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — with live counts (legacy parity, badge style matches
+          the My New Tickets page). */}
       <div className="flex flex-wrap gap-2">
         {TABS.map((t) => {
           const isActive = tab === t.key;
+          const count = counts[t.key];
           return (
             <button
               key={t.key}
               type="button"
               onClick={() => setTab(t.key)}
               className={cn(
-                'px-4 py-2 rounded-lg text-sm font-semibold transition border',
+                'px-4 py-2 rounded-lg text-sm font-semibold transition border inline-flex items-center gap-2',
                 isActive
-                  ? t.key === 'all'
-                    ? 'bg-primary text-white border-primary shadow-md shadow-primary/30'
-                    : 'bg-primary-dark text-white border-primary-dark shadow-md shadow-primary-dark/30'
+                  ? 'bg-primary text-white border-primary shadow-md shadow-primary/30'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
               )}
             >
-              {t.label}
+              <span>{t.label}</span>
+              <span
+                className={cn(
+                  'inline-flex items-center justify-center min-w-[24px] h-5 px-1.5 rounded-full text-xs font-bold',
+                  isActive ? 'bg-white/25 text-white' : 'bg-primary/10 text-primary'
+                )}
+              >
+                {countsRes.loading && countsRes.data == null ? '…' : count}
+              </span>
             </button>
           );
         })}
@@ -346,7 +422,6 @@ export default function OrderHistoryPage() {
 
       {/* Filter bar */}
       <div className="card p-3 space-y-3">
-        {/* Row 1 — quick search + per-page (LIVE, no Apply needed) */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[220px]">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -369,10 +444,7 @@ export default function OrderHistoryPage() {
           </select>
         </div>
 
-        {/* Row 2 — staged filters (Apply / Reset commits) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
-          {/* Ticket Created Date range — native <input type="date"> pair,
-              no extra library. Empty string clears the filter. */}
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Ticket Created — From</label>
             <input
@@ -393,7 +465,6 @@ export default function OrderHistoryPage() {
               onChange={(e) => setStaged((s) => ({ ...s, endDate: e.target.value }))}
             />
           </div>
-
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">City</label>
             <MultiSelect
@@ -403,7 +474,6 @@ export default function OrderHistoryPage() {
               onChange={(v) => setStaged((s) => ({ ...s, cityIds: v }))}
             />
           </div>
-
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Client Team</label>
             <MultiSelect
@@ -413,10 +483,7 @@ export default function OrderHistoryPage() {
               onChange={(v) => setStaged((s) => ({ ...s, ownerIds: v }))}
             />
           </div>
-
-          {/* Bucket — All Orders tab only. On Completed tab the column
-              is hidden because the tab itself fixes the status to 3+5. */}
-          {tab === 'all' && (
+          {tab === 'otherOrders' && (
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Bucket</label>
               <MultiSelect
@@ -429,7 +496,6 @@ export default function OrderHistoryPage() {
           )}
         </div>
 
-        {/* Row 3 — Apply / Reset action row */}
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs text-slate-500">
             {hasAnyApplied ? (
@@ -446,7 +512,6 @@ export default function OrderHistoryPage() {
               onClick={resetFilters}
               className="btn-outline"
               disabled={!hasAnyApplied && !hasStagedChanges && !q}
-              title="Clear all filters"
             >
               <X className="w-4 h-4" /> Reset
             </button>
@@ -455,7 +520,6 @@ export default function OrderHistoryPage() {
               onClick={applyFilters}
               className="btn-primary"
               disabled={!hasStagedChanges}
-              title="Apply staged filters"
             >
               <Filter className="w-4 h-4" /> Apply Filter
             </button>
@@ -469,39 +533,46 @@ export default function OrderHistoryPage() {
         </div>
       )}
 
-      {/* Table */}
+      {/* TABLE */}
       <div className="card overflow-x-auto">
         <table className="data-table">
           <thead>
-            <tr>
-              <th>Job ID</th>
-              <th>Ref ID</th>
-              <th>Client Ref ID</th>
-              <th>City</th>
-              <th>Customer</th>
-              <th>Appointment</th>
-              <th>Status of Order</th>
-              {currentTab.key === 'completed' && <th>Rating</th>}
-              <th>Source</th>
-              <th>Age</th>
-            </tr>
+            {tab === 'otherOrders' ? (
+              <tr>
+                <th>Job ID</th>
+                <th>Ref ID</th>
+                <th>Client Ref ID</th>
+                <th>City</th>
+                <th>Customer</th>
+                <th>Appointment</th>
+                <th>Status Of Order</th>
+                <th>Bucket</th>
+                <th>Source</th>
+                <th>Age</th>
+              </tr>
+            ) : (
+              <tr>
+                <th>Job ID</th>
+                <th>Client Ref ID</th>
+                <th>City</th>
+                <th>OTA</th>
+                <th>TAT</th>
+                <th>Appointment</th>
+                <th>App Start</th>
+                <th>Billing Value</th>
+                <th>Rating</th>
+                <th>Action</th>
+              </tr>
+            )}
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td colSpan={currentTab.key === 'completed' ? 10 : 9} className="text-center text-slate-500 py-8">
-                  Loading…
-                </td>
-              </tr>
+              <tr><td colSpan={colCount} className="text-center text-slate-500 py-8">Loading…</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr>
-                <td colSpan={currentTab.key === 'completed' ? 10 : 9} className="text-center text-slate-500 py-8">
-                  No orders found.
-                </td>
-              </tr>
+              <tr><td colSpan={colCount} className="text-center text-slate-500 py-8">No orders found.</td></tr>
             )}
-            {!loading && items.map((j) => {
+            {!loading && tab === 'otherOrders' && items.map((j) => {
               const age = ageInDays(j.requested_date_time);
               return (
                 <tr key={j.job_id} className="hover:bg-primary-50/50">
@@ -522,29 +593,73 @@ export default function OrderHistoryPage() {
                       <div className="text-xs text-slate-500">{j.customer_mob_no}</div>
                     )}
                   </td>
-                  <td className="text-xs">{formatAppt(j.requested_date_time)}</td>
+                  <td className="text-xs">{formatDate(j.requested_date_time)}</td>
                   <td>
                     <span className={cn('badge ring-1', statusBadgeClass(j.job_status))}>
                       {STATUS_LABELS[j.job_status] || `Status ${j.job_status}`}
                     </span>
                   </td>
-                  {currentTab.key === 'completed' && (
-                    <td>
-                      {j.rating ? (
-                        <span className="inline-flex items-center gap-1 text-amber-600">
-                          <Star className="w-3.5 h-3.5 fill-amber-400 stroke-amber-500" />
-                          <span className="text-xs font-semibold">{j.rating}</span>
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                  )}
+                  {/* "Bucket" — legacy showed a separate computed string;
+                       in the new schema this maps to the same human label
+                       as Status Of Order unless we add a backend bucketer. */}
+                  <td className="text-xs text-slate-600">{STATUS_LABELS[j.job_status] || '—'}</td>
                   <td className="text-xs">{j.source_type || '—'}</td>
                   <td className="text-xs">{age != null ? `${age} d` : '—'}</td>
                 </tr>
               );
             })}
+            {!loading && tab === 'completedOrders' && items.map((j) => (
+              <tr key={j.job_id} className="hover:bg-primary-50/50">
+                <td>
+                  <Link href={`/jobs/${j.job_id}`} className="text-primary hover:underline font-semibold inline-flex items-center gap-1">
+                    #{j.job_id}
+                    {j.is_escalated ? (
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500" aria-label="Escalated" />
+                    ) : null}
+                  </Link>
+                </td>
+                <td className="text-xs font-mono">{j.client_ref_id || '—'}</td>
+                <td>{j.city_name || '—'}</td>
+                <td className="text-xs">{computeOTA(j)}</td>
+                <td className="text-xs">{computeTAT(j)}</td>
+                <td className="text-xs">
+                  <div>{formatDate(j.requested_date_time)}</div>
+                  {j.time_slot && <div className="text-slate-500">{j.time_slot}</div>}
+                </td>
+                <td className="text-xs">{formatDate(j.checkin_date_time)}</td>
+                {/* Billing Value — total comes from SUM(job_services); not
+                    yet computed in the new backend. Showing "—" keeps the
+                    column shape for legacy parity. */}
+                <td className="text-xs text-slate-400">—</td>
+                <td>
+                  {j.rating ? (
+                    <span className="inline-flex items-center gap-1 text-amber-600">
+                      <Star className="w-3.5 h-3.5 fill-amber-400 stroke-amber-500" />
+                      <span className="text-xs font-semibold">{j.rating}</span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
+                <td>
+                  {/* Legacy "Reopen Invoice" / "Reopened" button — opens
+                      the detail panel; flag flips after backend re-open. */}
+                  <Link
+                    href={`/jobs/${j.job_id}`}
+                    className={cn(
+                      'inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold transition',
+                      j.job_reopen_flag === 1
+                        ? 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
+                        : 'bg-primary text-white hover:bg-primary-dark'
+                    )}
+                    title={j.job_reopen_flag === 1 ? 'Invoice was reopened' : 'Reopen invoice'}
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    {j.job_reopen_flag === 1 ? 'Reopened' : 'Reopen'} Invoice
+                  </Link>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { useFetch, useFetchOnce, useDebouncedValue } from '@/lib/hooks';
 import { api, ApiError } from '@/lib/api';
+import { useSpoc } from '@/lib/spoc-context';
 import { cn } from '@/lib/utils';
 import { MultiSelect, type MultiSelectOption } from '@/components/multi-select';
 
@@ -148,6 +149,7 @@ function filtersDiffer(a: FilterState, b: FilterState) {
 }
 
 export default function MyNewTicketsPage() {
+  const spoc = useSpoc();
   const [tab, setTab] = useState<TabKey>('unauthorized');
   const [q, setQ] = useState('');
   const debouncedQ = useDebouncedValue(q, 300);
@@ -177,15 +179,17 @@ export default function MyNewTicketsPage() {
   // authorize/reset/apply re-fetches without us writing extra glue.
   const countsPath = useMemo(() => {
     const p = new URLSearchParams();
+    // Same legacy-parity field as the list call — backend ignores it
+    // (uses JWT spoc.id) but it appears in the network tab.
+    p.set('clientSpocId', String(spoc.id));
     if (debouncedQ.trim()) p.set('q', debouncedQ.trim());
     if (applied.startDate)        p.set('startDate', applied.startDate);
     if (applied.endDate)          p.set('endDate',   applied.endDate);
     if (applied.cityIds.length)   p.set('cityIds',   applied.cityIds.join(','));
     if (applied.ownerIds.length)  p.set('ownerIds',  applied.ownerIds.join(','));
     if (refreshTick) p.set('_r', String(refreshTick));
-    const qs = p.toString();
-    return qs ? `/tickets/counts?${qs}` : '/tickets/counts';
-  }, [applied, debouncedQ, refreshTick]);
+    return `/tickets/counts?${p}`;
+  }, [applied, debouncedQ, refreshTick, spoc.id]);
 
   const countsRes = useFetch<{ unauthorized: number; authorized: number; noResponse: number }>(countsPath);
   const counts = countsRes.data ?? { unauthorized: 0, authorized: 0, noResponse: 0 };
@@ -202,6 +206,25 @@ export default function MyNewTicketsPage() {
   const fetchPath = useMemo(() => {
     const params = new URLSearchParams();
     params.set('ticketFlag', tab);
+    // Legacy parity — clientSpocId: the Angular client always
+    // overwrote this field with the logged-in user's contact id (see
+    // legacy job-status.service.ts:43-45). We mirror that here so the
+    // network call is 1:1 with the legacy payload.
+    //
+    // SECURITY NOTE: the backend IGNORES this value and uses
+    // req.spoc.id from the JWT. The query param is for debugging
+    // transparency only — a malicious caller can't impersonate a
+    // different SPOC by changing it.
+    params.set('clientSpocId', String(spoc.id));
+    // Legacy parity: the Angular client always sent `status: [9]` in
+    // the body alongside `flag`. The backend already pins status=9
+    // inside the ticketFlag branch, but mirroring it in the URL keeps
+    // the network request 1:1 with legacy for debugging — and is a
+    // harmless extra clause if the backend logic ever drifts.
+    //
+    // noResponse intentionally omits the status pin — legacy doesn't
+    // pin status on that flag (a "call later" job can be in any status).
+    if (tab !== 'noResponse') params.set('statuses', '9');
     if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
     if (applied.startDate)        params.set('startDate', applied.startDate);
     if (applied.endDate)          params.set('endDate',   applied.endDate);
@@ -215,7 +238,7 @@ export default function MyNewTicketsPage() {
     // any other state.
     if (refreshTick) params.set('_r', String(refreshTick));
     return `/jobs?${params}`;
-  }, [tab, applied, debouncedQ, pageSize, page, refreshTick]);
+  }, [tab, applied, debouncedQ, pageSize, page, refreshTick, spoc.id]);
 
   const { data, error, loading } = useFetch<{ items: Job[]; total: number }>(fetchPath);
   const items = data?.items ?? [];
